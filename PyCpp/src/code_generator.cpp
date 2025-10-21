@@ -1850,7 +1850,8 @@ void CodeGenerator::visit(IfStmt& node) {
         output << getIndent() << "}\n";
     }
 
-    // Handle else branch
+    // FIX: Only generate else branch if this if statement actually has one
+    // Don't generate else for nested if statements that don't have their own else
     if (!node.else_branch.empty()) {
         output << getIndent() << "else {\n";
         indent();

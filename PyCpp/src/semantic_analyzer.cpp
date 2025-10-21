@@ -628,6 +628,7 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
     }
 }
 
+// In SemanticAnalyzer::analyzeVarDecl - MODIFY the member variable handling:
 void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
     std::string type_name = typeToString(var->type.get());
 
@@ -661,17 +662,24 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
         }
     }
     else {
-        // Regular variable declaration - check if already declared in current scope
-        if (symbolExistsInCurrentScope(var->var_name)) {
-            // Check if it's the same declaration (line/column match)
-            Symbol* existing = findSymbol(var->var_name);
-            if (existing && existing->scope_level == current_scope) {
-                error("Symbol '" + var->var_name + "' already declared in current scope",
-                    var->line, var->column);
-                return;
-            }
+        // === FIX: Check if we're in a struct context ===
+        if (current_class && classes[current_class->name].is_struct) {
+            // In struct context, don't add fields to global scope
+            std::cout << "Skipping global scope addition for struct field: " << var->var_name << std::endl;
         }
-        addSymbol(var->var_name, type_name, var->value != nullptr);
+        else {
+            // Regular variable declaration - check if already declared in current scope
+            if (symbolExistsInCurrentScope(var->var_name)) {
+                // Check if it's the same declaration (line/column match)
+                Symbol* existing = findSymbol(var->var_name);
+                if (existing && existing->scope_level == current_scope) {
+                    error("Symbol '" + var->var_name + "' already declared in current scope",
+                        var->line, var->column);
+                    return;
+                }
+            }
+            addSymbol(var->var_name, type_name, var->value != nullptr);
+        }
     }
 
     if (var->value) {
@@ -813,9 +821,30 @@ void SemanticAnalyzer::analyzeClass(ClassDef* cls) {
 void SemanticAnalyzer::analyzeStruct(StructDef* struc) {
     std::cout << "Analyzing struct: " << struc->name << std::endl;
 
-    // Structs are similar to classes but with public members
+    // Create a dedicated scope for this struct
+    ClassSymbol& struct_sym = classes[struc->name];
+    struct_sym.is_struct = true; // Mark as struct for code generation
+
+    // Analyze fields but DON'T add them to global scope
     for (auto& field : struc->fields) {
-        analyzeVarDecl(field.get());
+        std::string field_name = field->var_name;
+        std::string field_type = typeToString(field->type.get());
+
+        // Add to struct's attribute map, not global scope
+        struct_sym.attributes[field_name] = {
+            field_name,
+            field_type,
+            field->value != nullptr,
+            0 // struct scope
+        };
+
+        std::cout << "Added struct field: " << struc->name << "." << field_name
+            << " : " << field_type << std::endl;
+
+        // Analyze initializer expression if present
+        if (field->value) {
+            analyzeExpression(field->value.get());
+        }
     }
 }
 

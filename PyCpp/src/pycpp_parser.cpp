@@ -360,7 +360,13 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
 
     std::cout << "parseTopLevelStatement at position " << position << ", token: '" << peek().value << "'" << std::endl;
 
-    // Handle use statements first
+    // Handle struct definitions FIRST (before other statements)
+    if (check(TokenType::STRUCT)) {
+        advance();
+        return parseStructDef();
+    }
+
+    // Handle use statements
     if (check(TokenType::USE)) {
         advance();
         return parseUseStmt();
@@ -370,12 +376,6 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
     if (check(TokenType::IMPORT)) {
         advance();
         return parseImportStmt();
-    }
-
-    // Handle struct definitions
-    if (check(TokenType::STRUCT)) {
-        advance();
-        return parseStructDef();
     }
 
     // Handle template definitions
@@ -412,7 +412,6 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
     }
     return stmt;
 }
-
 std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     // Handle unsafe blocks in statement context
     if (check(TokenType::UNSAFE)) {
@@ -1165,7 +1164,7 @@ std::unique_ptr<IfStmt> PyCppParser::parseIfStmt() {
         }
     }
 
-    // Elif branches - FIXED: Properly handle elif
+    // Elif branches
     while (check(TokenType::ELIF)) {
         advance(); // consume 'elif'
         auto elif_condition = parseExpression();
@@ -1185,26 +1184,36 @@ std::unique_ptr<IfStmt> PyCppParser::parseIfStmt() {
         if_stmt->elif_branches.emplace_back(std::move(elif_condition), std::move(elif_body));
     }
 
-    // Else branch - FIXED: Properly handle else
+    // FIX: Only parse else branch if it's at the same indentation level as the original if
     if (check(TokenType::ELSE)) {
+        // Save position to check if this else belongs to the current if
+        size_t else_pos = position;
         advance(); // consume 'else'
-        consume(TokenType::COLON, "Expected ':' after else");
 
-        if (check(TokenType::NEWLINE)) {
-            consume(TokenType::NEWLINE, "Expected newline after else");
-            if_stmt->else_branch = parseBlock();
+        // Check if there's a colon immediately after else
+        if (check(TokenType::COLON)) {
+            consume(TokenType::COLON, "Expected ':' after else");
+
+            if (check(TokenType::NEWLINE)) {
+                consume(TokenType::NEWLINE, "Expected newline after else");
+                if_stmt->else_branch = parseBlock();
+            }
+            else {
+                // Single-line else
+                if (auto stmt = parseStatement()) {
+                    if_stmt->else_branch.push_back(std::move(stmt));
+                }
+            }
         }
         else {
-            // Single-line else
-            if (auto stmt = parseStatement()) {
-                if_stmt->else_branch.push_back(std::move(stmt));
-            }
+            // This else doesn't have a colon, so it might belong to a different if
+            // Roll back and let the outer if statement handle it
+            position = else_pos;
         }
     }
 
     return if_stmt;
 }
-
 std::unique_ptr<WhileStmt> PyCppParser::parseWhileStmt() {
     auto while_stmt = std::make_unique<WhileStmt>();
     while_stmt->line = tokens[position - 1].line;
@@ -1382,7 +1391,7 @@ std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
     return use_stmt;
 }
 
-// FIXED: Enhanced block parsing to prevent return statements inside loops
+// FIXED: Enhanced block parsing to properly detect end of function
 std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
     std::vector<std::unique_ptr<Stmt>> statements;
     std::cout << "Starting to parse block at position " << position << std::endl;
@@ -1395,20 +1404,43 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
         // Skip empty lines and handle indentation
         handleIndentation();
 
-        // FIXED: Removed DEDENT token check since it's not defined
-        // Check for end of block conditions
-        if (check(TokenType::END_OF_FILE) ||
-            (position > starting_position &&
-                (check(TokenType::CLASS) || check(TokenType::DEF) ||
-                    check(TokenType::ELIF) || check(TokenType::ELSE)))) {
-            std::cout << "End of block detected at position " << position << std::endl;
-            break;
+        // FIXED: Enhanced end-of-block detection
+        // Check for top-level constructs that indicate end of current block
+        if (position > starting_position) {
+            Token current = peek();
+
+            // These tokens indicate we're back at top-level scope
+            if (current.type == TokenType::CLASS ||
+                current.type == TokenType::DEF ||
+                current.type == TokenType::STRUCT ||
+                current.type == TokenType::TEMPLATE ||
+                current.type == TokenType::CONSTEXPR ||
+                current.type == TokenType::UNSAFE ||
+                current.type == TokenType::IMPORT ||
+                current.type == TokenType::USE) {
+
+                std::cout << "End of block detected (top-level construct): " << current.value << std::endl;
+                break;
+            }
+
+            // Also check for elif/else that belong to outer if statements
+            if ((current.type == TokenType::ELIF || current.type == TokenType::ELSE) &&
+                position > starting_position) {
+                std::cout << "End of block detected (elif/else): " << current.value << std::endl;
+                break;
+            }
         }
 
         // Skip if we're at a newline (empty line)
         if (check(TokenType::NEWLINE)) {
             advance();
             continue;
+        }
+
+        // FIXED: Check if we've reached the end of file
+        if (atEnd()) {
+            std::cout << "End of block detected (EOF)" << std::endl;
+            break;
         }
 
         try {

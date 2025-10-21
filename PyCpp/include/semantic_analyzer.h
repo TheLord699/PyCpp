@@ -29,6 +29,7 @@ private:
         std::string base_class;
         std::unordered_map<std::string, Symbol> attributes;
         std::unordered_map<std::string, FunctionSymbol> methods;
+        bool is_struct = false;  // ADD THIS LINE - distinguishes structs from classes
     };
 
     struct AttributeSymbol {

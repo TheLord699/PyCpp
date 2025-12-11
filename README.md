@@ -1,27 +1,27 @@
-# ?? **PyCPP — Pythonic Syntax, Native C++ Power**
+# **PyCPP â€” Pythonic Syntax, Native C++ Power**
 
 > **Write like Python. Compile like C++. Run at native speed.**
 
 ---
  
-## ?? Overview
+##  Overview
 
 **PyCPP** is a statically typed, indentation-based programming language that compiles directly to **modern C++**.  
 It combines the **simplicity and readability of Python** with the **performance and control of C++**, without any runtime overhead.
 
-### ?? Core Idea
+###  Core Idea
 
-> If C++ can do it, **PyCPP can too** — but with **cleaner, more Pythonic syntax** and **automatic header and memory management**.
+> If C++ can do it, **PyCPP can too** â€” but with **cleaner, more Pythonic syntax** and **automatic header and memory management**.
 
 ---
 
-## ? Highlights
+##  Highlights
 
 - **Pythonic syntax**, **C++ semantics**
-- **Static typing** — no runtime overhead
-- **Native STL integration** — `list`, `dict`, `str` backed by `std::vector`, `std::map`, `std::string`
-- **Smart Include System** — automatically includes only standard libraries when needed
-- **Headerless design** — no `.h` or `.hpp` files
+- **Static typing** â€” no runtime overhead
+- **Native STL integration** â€” `list`, `dict`, `str` backed by `std::vector`, `std::map`, `std::string`
+- **Smart Include System** â€” automatically includes only standard libraries when needed
+- **Headerless design** â€” no `.h` or `.hpp` files
 - **Full C/C++ interop** via `use <header>`
 - **Manual memory control** with optional unsafe blocks
 - **Compile-time constants**, **templates**, **structs**
@@ -29,9 +29,9 @@ It combines the **simplicity and readability of Python** with the **performance 
 
 ---
 
-## ?? 1. Syntax
+##  1. Syntax
 
-PyCPP uses indentation to define blocks — no braces `{}` or semicolons `;`.  
+PyCPP uses indentation to define blocks â€” no braces `{}` or semicolons `;`.  
 Its syntax closely resembles Python, while enforcing C++-like static typing.
 
 - `def` for functions  
@@ -44,7 +44,7 @@ Future enhancements include **list comprehensions** and **slicing**.
 
 ---
 
-## ?? 2. Typing System
+##  2. Typing System
 
 PyCPP is fully **statically typed**, with every variable, function argument, and return type declared explicitly.
 
@@ -62,9 +62,9 @@ Optional **type inference** is planned for the future.
 
 ---
 
-## ?? 3. Memory Management
+##  3. Memory Management
 
-PyCPP gives full manual control over memory allocation — no garbage collector.
+PyCPP gives full manual control over memory allocation â€” no garbage collector.
 
 - Allocate and free memory manually using `mem.alloc()` and `mem.free()`
 - Perform pointer arithmetic inside `unsafe:` blocks
@@ -73,7 +73,7 @@ PyCPP gives full manual control over memory allocation — no garbage collector.
 
 ---
 
-## ?? 4. Control Flow
+##  4. Control Flow
 
 Supports all common control flow structures with Python-like syntax:
 
@@ -81,26 +81,26 @@ Supports all common control flow structures with Python-like syntax:
 - `while`, `for`
 - `break`, `continue`
 
-Future versions will add **exception handling** (`try/except ? try/catch`).
+Future versions will add **exception handling** (`try/except  try/catch`).
 
 ---
 
-## ?? 5. Functions
+##  5. Functions
 
 Defined using Python-style syntax with **required return types**.  
 Default parameters and native C++ type returns are supported.
 
 - Functions cannot be overloaded yet (planned)
-- Pythonic function bodies ? standard C++ function generation
+- Pythonic function bodies  standard C++ function generation
 
 ---
 
-## ?? 6. Collections
+##  6. Collections
 
 Pythonic syntax backed by the C++ STL.
 
-- `list[T]` ? `std::vector<T>`
-- `dict[K,V]` ? `std::map<K,V>`
+- `list[T]`  `std::vector<T>`
+- `dict[K,V]`  `std::map<K,V>`
 
 Supports:
 
@@ -112,10 +112,10 @@ Future enhancements include **slicing** and **comprehensions**.
 
 ---
 
-## ?? 7. Classes (Headerless OOP)
+##  7. Classes (Headerless OOP)
 
 Defines classes using Pythonic syntax, compiled to valid C++ classes.  
-No manual header management — PyCPP auto-generates everything internally.
+No manual header management â€” PyCPP auto-generates everything internally.
 
 - Instance variables are typed inside `__init__`
 - Inheritance is supported
@@ -124,7 +124,7 @@ No manual header management — PyCPP auto-generates everything internally.
 
 ---
 
-## ?? 8. Structs
+##  8. Structs
 
 Lightweight, data-only containers that compile to `struct` with public members.
 
@@ -136,7 +136,7 @@ Ideal for POD-like data transfer objects.
 
 ---
 
-## ?? 9. Templates
+##  9. Templates
 
 Supports **C++ templates** using Pythonic syntax for both classes and functions.
 
@@ -146,7 +146,7 @@ Supports **C++ templates** using Pythonic syntax for both classes and functions.
 
 ---
 
-## ?? 10. Constexpr
+##  10. Constexpr
 
 Supports **compile-time constants** via `constexpr`.
 
@@ -154,9 +154,9 @@ Used for mathematical or configuration constants evaluated at compile-time.
 
 ---
 
-## ?? 11. Imports & Modules
+##  11. Imports & Modules
 
-### Pythonic Imports — *Only for PyCPP Files*
+### Pythonic Imports â€” *Only for PyCPP Files*
 
 ```python
 from player import Player

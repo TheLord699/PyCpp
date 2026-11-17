@@ -224,11 +224,151 @@ public:
 };
 
 // CodeGenerator implementation
-CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {}
+CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
+    scopes.emplace_back(); // global scope
+}
+
+// ---- Scoped variable types ----
+
+void CodeGenerator::pushScope() { scopes.emplace_back(); }
+
+void CodeGenerator::popScope() {
+    if (scopes.size() > 1) scopes.pop_back();
+}
+
+void CodeGenerator::declareVar(const std::string& name, Type* type) {
+    scopes.back()[name] = type;
+}
+
+Type* CodeGenerator::lookupVar(const std::string& name) {
+    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+        auto found = it->find(name);
+        if (found != it->end()) return found->second;
+    }
+    return nullptr;
+}
+
+// True when the expression is a variable declared as a pointer (*T), so that
+// member access must use '->' instead of '.'.
+bool CodeGenerator::isPointerExpr(Expr* expr) {
+    if (auto ident = dynamic_cast<Identifier*>(expr)) {
+        Type* type = lookupVar(ident->name);
+        return type && dynamic_cast<PointerType*>(type) && !type->is_reference;
+    }
+    return false;
+}
+
+// Render an expression to a string without touching the main output.
+std::string CodeGenerator::exprToString(Expr* expr) {
+    std::ostringstream saved;
+    saved.swap(output);
+    generateExpression(expr);
+    std::string result = output.str();
+    output.swap(saved);
+    return result;
+}
+
+bool CodeGenerator::usesSelf(Expr* expr) {
+    if (!expr) return false;
+    if (auto ident = dynamic_cast<Identifier*>(expr)) return ident->name == "self";
+    if (auto bin = dynamic_cast<BinaryOp*>(expr)) return usesSelf(bin->left.get()) || usesSelf(bin->right.get());
+    if (auto un = dynamic_cast<UnaryOp*>(expr)) return usesSelf(un->operand.get());
+    if (auto mem = dynamic_cast<MemberAccess*>(expr)) return usesSelf(mem->object.get());
+    if (auto tern = dynamic_cast<TernaryOp*>(expr)) {
+        return usesSelf(tern->condition.get()) || usesSelf(tern->then_expr.get()) || usesSelf(tern->else_expr.get());
+    }
+    if (auto call = dynamic_cast<CallExpr*>(expr)) {
+        if (usesSelf(call->callee.get())) return true;
+        for (auto& arg : call->arguments) if (usesSelf(arg.get())) return true;
+        return false;
+    }
+    if (auto list = dynamic_cast<ListLiteral*>(expr)) {
+        for (auto& e : list->elements) if (usesSelf(e.get())) return true;
+        return false;
+    }
+    if (auto dict = dynamic_cast<DictLiteral*>(expr)) {
+        for (auto& kv : dict->items) if (usesSelf(kv.first.get()) || usesSelf(kv.second.get())) return true;
+        return false;
+    }
+    return false;
+}
+
+// Shortest text that reads back as the same double, always with a '.' or exponent
+// so that 10.0 stays a floating-point literal in C++.
+std::string CodeGenerator::formatDouble(double value) {
+    std::ostringstream text;
+    for (int precision = 1; precision <= 17; ++precision) {
+        text.str("");
+        text.precision(precision);
+        text << value;
+        if (std::stod(text.str()) == value) break;
+    }
+    std::string result = text.str();
+    if (result.find_first_of(".eEn") == std::string::npos) result += ".0"; // 'n' = nan/inf
+    return result;
+}
+
+void CodeGenerator::generateTemplateHeader(const std::vector<std::string>& params) {
+    if (params.empty()) return;
+    output << getIndent() << "template <";
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i > 0) output << ", ";
+        output << "typename " << params[i];
+    }
+    output << ">\n";
+}
+
+// Deep copy of a type tree.
+static std::unique_ptr<Type> cloneType(Type* type) {
+    if (!type) return nullptr;
+    std::unique_ptr<Type> copy;
+    if (auto basic = dynamic_cast<BasicType*>(type)) {
+        auto t = std::make_unique<BasicType>();
+        for (auto& arg : basic->type_args) t->type_args.push_back(cloneType(arg.get()));
+        copy = std::move(t);
+    }
+    else if (auto ptr = dynamic_cast<PointerType*>(type)) {
+        auto t = std::make_unique<PointerType>();
+        t->base_type = cloneType(ptr->base_type.get());
+        copy = std::move(t);
+    }
+    else if (auto list = dynamic_cast<ListType*>(type)) {
+        auto t = std::make_unique<ListType>();
+        t->element_type = cloneType(list->element_type.get());
+        copy = std::move(t);
+    }
+    else if (auto dict = dynamic_cast<DictType*>(type)) {
+        auto t = std::make_unique<DictType>();
+        t->key_type = cloneType(dict->key_type.get());
+        t->value_type = cloneType(dict->value_type.get());
+        copy = std::move(t);
+    }
+    else {
+        return nullptr;
+    }
+    copy->name = type->name;
+    copy->is_const = type->is_const;
+    copy->is_reference = type->is_reference;
+    copy->line = type->line;
+    copy->column = type->column;
+    return copy;
+}
 
 std::string CodeGenerator::generate(std::unique_ptr<Program>& program, IncludeManager& include_manager) {
     output.str(""); // Clear any existing content
+    header_mode = false;
     generateProgram(program.get(), include_manager);
+    return output.str();
+}
+
+std::string CodeGenerator::generateHeader(std::unique_ptr<Program>& program, IncludeManager& include_manager,
+    const std::string& guard_name) {
+    output.str("");
+    header_mode = true;
+    output << "#ifndef " << guard_name << "\n";
+    output << "#define " << guard_name << "\n\n";
+    generateProgram(program.get(), include_manager);
+    output << "\n#endif // " << guard_name << "\n";
     return output.str();
 }
 
@@ -255,28 +395,78 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     // FIRST: Analyze the program to detect required features
     analyzeProgramForIncludes(program, include_manager);
 
-    // Extract imports to generate includes
+    // Remember imported module names and the headers they need
     std::vector<std::string> import_includes;
     imported_modules.clear();
     for (auto& stmt : program->statements) {
+        if (auto use_stmt = dynamic_cast<UseStmt*>(stmt.get())) {
+            // `use <cmath>` is a request for that C++ header
+            include_manager.trackManualInclude("<" + use_stmt->library + ">");
+        }
         if (auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get())) {
-            // Generate include for imported module
             import_includes.push_back("\"" + import_stmt->module + ".h\"");
-            // Remember the module name so 'module.member' can be told apart
-            // from 'object.member'
             imported_modules.insert(import_stmt->module);
         }
     }
 
+    // Generate the body FIRST, so that features discovered while generating it
+    // (for example std::move needing <utility>) are known when includes are written.
+    std::string prefix = output.str(); // include guard in header mode
+    output.str("");
+
+    for (auto& stmt : program->statements) {
+        Stmt* node = stmt.get();
+
+        if (header_mode) {
+            if (auto func = dynamic_cast<FunctionDef*>(node)) {
+                if (!func->type_params.empty()) {
+                    func->accept(*this);          // templates must be fully visible in the header
+                    output << "\n";
+                }
+                else if (func->name != "main") {
+                    generatePrototype(func);      // everything else is declared only
+                }
+            }
+            else if (dynamic_cast<ClassDef*>(node) || dynamic_cast<StructDef*>(node) ||
+                dynamic_cast<TemplateDef*>(node) || dynamic_cast<ConstexprDef*>(node)) {
+                node->accept(*this);
+                output << "\n";
+            }
+            else if (auto var = dynamic_cast<VarDecl*>(node)) {
+                output << "extern ";
+                generateType(var->type.get());
+                output << " " << var->var_name << ";\n";
+            }
+        }
+        else {
+            // Source file: classes, structs, templates and constants live in the header
+            if (dynamic_cast<ClassDef*>(node) || dynamic_cast<StructDef*>(node) ||
+                dynamic_cast<TemplateDef*>(node) || dynamic_cast<ConstexprDef*>(node)) {
+                continue;
+            }
+            if (auto func = dynamic_cast<FunctionDef*>(node)) {
+                if (!func->type_params.empty()) continue; // generic functions live in the header
+            }
+            node->accept(*this);
+            output << "\n";
+        }
+    }
+
+    std::string body = output.str();
+    output.str("");
+
+    if (needs_utility) include_manager.trackFeature("utility");
+
+    output << prefix;
+
     // Generate includes from include manager
     auto includes = include_manager.getRequiredIncludes();
     for (const auto& include : includes) {
-        // Extract just the filename if it's a local header with full path
+        // Generated headers sit next to their .cpp file, so a quoted local include is
+        // reduced to its bare filename. This covers both path separators, e.g.
+        // "C:\Users\...\temp\test_output.h" and "src/temp/test_output.h".
         std::string include_stmt = include;
         if (!include.empty() && include[0] == '"' && include.find_first_of("\\/") != std::string::npos) {
-            // Generated headers sit next to their .cpp file, so a quoted local include
-            // is reduced to its bare filename. This covers both separators, e.g.
-            // "C:\Users\...\temp\test_output.h" and "src/temp/test_output.h".
             size_t last_slash = include.find_last_of("\\/");
             size_t end_quote = include.find_last_of('"');
             if (last_slash != std::string::npos && end_quote != std::string::npos) {
@@ -287,95 +477,174 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
         output << "#include " << include_stmt << "\n";
     }
 
-    // Add import includes
+    // Headers of imported PyCPP modules
     for (const auto& include : import_includes) {
         output << "#include " << include << "\n";
     }
 
-    output << "\n";
-
-    // Generate actual code
-    for (auto& stmt : program->statements) {
-        stmt->accept(*this);
-        output << "\n";
-    }
+    output << "\n" << body;
 }
 
 void CodeGenerator::generateStatement(Stmt* stmt) {
     stmt->accept(*this);
 }
 
-void CodeGenerator::generateFunction(FunctionDef* func) {
-    FunctionDef* previous_function = current_function;
-    current_function = func;
-
-    output << getIndent();
-
-    // Handle constructors specially
-    bool is_constructor = (func->name == "__init__" && current_class);
-
-    if (is_constructor) {
-        // For constructors, use the class name instead of __init__
-        output << current_class->name;
-    }
-    else {
-        // Return type and name for regular functions
-        generateType(func->return_type.get());
-        output << " " << func->name;
-    }
-
-    output << "(";
-
-    // Parameters - handle self parameter specially
+// Parameter list for a definition or prototype. Default values may appear only once
+// in C++, so a free function's definition (in the .cpp) omits the ones its prototype has.
+void CodeGenerator::generateParameters(FunctionDef* func, bool include_defaults) {
     bool first_param = true;
-    bool has_self_param = false;
+    for (const auto& param : func->parameters) {
+        // 'self' is implicit in C++ member functions
+        if (param.name == "self" && current_class) continue;
 
-    for (size_t i = 0; i < func->parameters.size(); ++i) {
-        const auto& param = func->parameters[i];
-
-        // Skip 'self' parameter for member functions
-        if (param.name == "self" && current_class) {
-            has_self_param = true;
-            continue;
-        }
-
-        if (!first_param) {
-            output << ", ";
-        }
+        if (!first_param) output << ", ";
         first_param = false;
 
         generateType(param.type.get());
         output << " " << param.name;
 
-        if (param.default_value) {
+        if (param.default_value && include_defaults) {
             output << " = ";
             generateExpression(param.default_value.get());
         }
     }
+}
 
+// Declaration only: "int add(int a, int b);"
+void CodeGenerator::generatePrototype(FunctionDef* func) {
+    output << getIndent();
+    generateType(func->return_type.get());
+    output << " " << func->name << "(";
+    generateParameters(func, true);
+    output << ");\n";
+}
+
+// Collect the leading statements of a constructor that can become entries of the
+// member initializer list: "self.x: T = expr" or "self.x = expr", where expr does not
+// depend on 'self'. Only a leading run of such statements is taken, so statement
+// order (and therefore any side effects) is unchanged.
+void CodeGenerator::collectConstructorInitializers(FunctionDef* ctor,
+    std::vector<std::pair<std::string, std::string>>& inits, size_t& consumed_count) {
+    std::set<std::string> seen;
+    consumed_count = 0;
+
+    for (auto& stmt : ctor->body) {
+        std::string member;
+        Expr* value = nullptr;
+
+        if (auto var_decl = dynamic_cast<VarDecl*>(stmt.get())) {
+            if (var_decl->var_name.find("self.") != 0 || !var_decl->value) break;
+            member = var_decl->var_name.substr(5);
+            value = var_decl->value.get();
+        }
+        else if (auto expr_stmt = dynamic_cast<ExprStmt*>(stmt.get())) {
+            auto bin_op = dynamic_cast<BinaryOp*>(expr_stmt->expr.get());
+            if (!bin_op || bin_op->op != "=") break;
+            auto member_access = dynamic_cast<MemberAccess*>(bin_op->left.get());
+            if (!member_access) break;
+            auto self_ident = dynamic_cast<Identifier*>(member_access->object.get());
+            if (!self_ident || self_ident->name != "self") break;
+            member = member_access->member;
+            value = bin_op->right.get();
+        }
+        else {
+            break;
+        }
+
+        if (usesSelf(value) || seen.count(member)) break;
+        seen.insert(member);
+
+        // A by-value parameter of a heavy type (string, list, dict) is moved into the
+        // member instead of being copied.
+        std::string init_expr;
+        bool moved = false;
+        if (auto ident = dynamic_cast<Identifier*>(value)) {
+            for (const auto& param : ctor->parameters) {
+                if (param.name != ident->name || !param.type) continue;
+                Type* t = param.type.get();
+                bool by_value = !t->is_reference && !dynamic_cast<PointerType*>(t);
+                bool heavy = dynamic_cast<ListType*>(t) || dynamic_cast<DictType*>(t);
+                if (auto basic = dynamic_cast<BasicType*>(t)) {
+                    heavy = (basic->name == "std::string" || basic->name == "str");
+                }
+                if (by_value && heavy && !t->is_const) moved = true;
+                break;
+            }
+        }
+        if (moved) {
+            init_expr = "std::move(" + exprToString(value) + ")";
+            needs_utility = true;
+        }
+        else {
+            init_expr = exprToString(value);
+        }
+
+        inits.emplace_back(member, init_expr);
+        consumed_count++;
+    }
+}
+
+void CodeGenerator::generateFunction(FunctionDef* func) {
+    FunctionDef* previous_function = current_function;
+    current_function = func;
+
+    const bool is_constructor = (func->name == "__init__" && current_class);
+    const bool is_generic = !func->type_params.empty();
+    // Methods live in the class body and templates in the header, so both keep their
+    // default arguments; a free function's definition does not repeat them.
+    const bool include_defaults = current_class != nullptr || is_generic;
+
+    pushScope();
+    for (const auto& param : func->parameters) {
+        if (param.name == "self" && current_class) continue;
+        declareVar(param.name, param.type.get());
+    }
+
+    generateTemplateHeader(func->type_params);
+    output << getIndent();
+
+    if (is_constructor) {
+        output << current_class->name; // constructors take the class name
+    }
+    else {
+        generateType(func->return_type.get());
+        output << " " << func->name;
+    }
+
+    output << "(";
+    generateParameters(func, include_defaults);
     output << ")";
 
-    // Handle constructor initialization lists
-    if (is_constructor && current_class) {
-        generateMemberInitializerList(func, current_class);
+    std::vector<std::pair<std::string, std::string>> inits;
+    size_t consumed = 0;
+    if (is_constructor) {
+        collectConstructorInitializers(func, inits, consumed);
+        if (!inits.empty()) {
+            output << "\n" << getIndent() << "    : ";
+            for (size_t i = 0; i < inits.size(); ++i) {
+                if (i > 0) output << ", ";
+                output << inits[i].first << "(" << inits[i].second << ")";
+            }
+        }
+    }
+
+    const size_t first_body_stmt = consumed;
+    if (is_constructor && first_body_stmt >= func->body.size()) {
+        output << " {}\n"; // everything went into the initializer list
+        popScope();
+        current_function = previous_function;
+        return;
     }
 
     output << " {\n";
     indent();
 
-    // Body - handle constructor body specially to avoid duplicate member assignments
-    if (is_constructor) {
-        generateConstructorBody(func, current_class);
-    }
-    else {
-        // Regular function body
-        for (auto& stmt : func->body) {
-            generateStatement(stmt.get());
-        }
+    for (size_t i = first_body_stmt; i < func->body.size(); ++i) {
+        generateStatement(func->body[i].get());
     }
 
     // Add implicit return for main function if missing
-    if (func->name == "main" && func->return_type->name == "int") {
+    if (func->name == "main" && func->return_type && func->return_type->name == "int") {
         bool has_return = false;
         for (auto& stmt : func->body) {
             if (dynamic_cast<ReturnStmt*>(stmt.get())) {
@@ -391,161 +660,8 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
     dedent();
     output << getIndent() << "}\n";
 
+    popScope();
     current_function = previous_function;
-}
-
-void CodeGenerator::generateMemberInitializerList(FunctionDef* constructor, ClassDef* cls) {
-    bool has_initializers = false;
-    std::vector<std::pair<std::string, std::string>> initializers;
-
-    // Collect member variables that need initialization from constructor parameters
-    for (auto& stmt : constructor->body) {
-        if (auto expr_stmt = dynamic_cast<ExprStmt*>(stmt.get())) {
-            if (auto bin_op = dynamic_cast<BinaryOp*>(expr_stmt->expr.get())) {
-                if (bin_op->op == "=") {
-                    // Check if this is a member assignment: self.member = parameter
-                    if (auto member_access = dynamic_cast<MemberAccess*>(bin_op->left.get())) {
-                        if (auto self_ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-                            if (self_ident->name == "self") {
-                                std::string member_name = member_access->member;
-
-                                // Check if right side is a parameter
-                                if (auto param_ident = dynamic_cast<Identifier*>(bin_op->right.get())) {
-                                    // Verify this parameter exists in constructor
-                                    for (const auto& param : constructor->parameters) {
-                                        if (param.name == param_ident->name) {
-                                            initializers.emplace_back(member_name, param_ident->name);
-                                            has_initializers = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Handle literal assignments in initializer list
-                                else if (auto int_lit = dynamic_cast<IntLiteral*>(bin_op->right.get())) {
-                                    initializers.emplace_back(member_name, std::to_string(int_lit->value));
-                                    has_initializers = true;
-                                }
-                                else if (auto str_lit = dynamic_cast<StringLiteral*>(bin_op->right.get())) {
-                                    initializers.emplace_back(member_name, "\"" + str_lit->value + "\"");
-                                    has_initializers = true;
-                                }
-                                else if (auto float_lit = dynamic_cast<FloatLiteral*>(bin_op->right.get())) {
-                                    initializers.emplace_back(member_name, std::to_string(float_lit->value));
-                                    has_initializers = true;
-                                }
-                                else if (auto bool_lit = dynamic_cast<BoolLiteral*>(bin_op->right.get())) {
-                                    initializers.emplace_back(member_name, bool_lit->value ? "true" : "false");
-                                    has_initializers = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Also handle variable declarations in constructor body
-        else if (auto var_decl = dynamic_cast<VarDecl*>(stmt.get())) {
-            if (var_decl->var_name.find("self.") == 0) {
-                std::string member_name = var_decl->var_name.substr(5);
-                if (var_decl->value) {
-                    // For variable declarations with values, we can initialize directly
-                    std::stringstream value_stream;
-                    CodeGenerator value_generator;
-                    value_generator.generateExpression(var_decl->value.get());
-                    initializers.emplace_back(member_name, value_stream.str());
-                    has_initializers = true;
-                }
-            }
-        }
-    }
-
-    if (has_initializers) {
-        output << " : ";
-        for (size_t i = 0; i < initializers.size(); ++i) {
-            if (i > 0) output << ", ";
-            output << initializers[i].first << "(" << initializers[i].second << ")";
-        }
-    }
-}
-
-void CodeGenerator::generateConstructorBody(FunctionDef* constructor, ClassDef* cls) {
-    // For constructor body, we need to filter out member assignments that are already
-    // handled in the initializer list, and handle any additional logic
-
-    std::unordered_set<std::string> initialized_members;
-
-    // First pass: identify members that are initialized in the initializer list
-    for (auto& stmt : constructor->body) {
-        if (auto expr_stmt = dynamic_cast<ExprStmt*>(stmt.get())) {
-            if (auto bin_op = dynamic_cast<BinaryOp*>(expr_stmt->expr.get())) {
-                if (bin_op->op == "=") {
-                    if (auto member_access = dynamic_cast<MemberAccess*>(bin_op->left.get())) {
-                        if (auto self_ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-                            if (self_ident->name == "self") {
-                                // Check if this is a simple parameter assignment
-                                if (auto param_ident = dynamic_cast<Identifier*>(bin_op->right.get())) {
-                                    for (const auto& param : constructor->parameters) {
-                                        if (param.name == param_ident->name) {
-                                            initialized_members.insert(member_access->member);
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Check if this is a literal assignment
-                                else if (dynamic_cast<IntLiteral*>(bin_op->right.get()) ||
-                                    dynamic_cast<StringLiteral*>(bin_op->right.get()) ||
-                                    dynamic_cast<FloatLiteral*>(bin_op->right.get()) ||
-                                    dynamic_cast<BoolLiteral*>(bin_op->right.get())) {
-                                    initialized_members.insert(member_access->member);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Second pass: generate the body, skipping already-initialized members
-    for (auto& stmt : constructor->body) {
-        bool skip_stmt = false;
-
-        // Check if this statement is a member assignment that's already handled
-        if (auto expr_stmt = dynamic_cast<ExprStmt*>(stmt.get())) {
-            if (auto bin_op = dynamic_cast<BinaryOp*>(expr_stmt->expr.get())) {
-                if (bin_op->op == "=") {
-                    if (auto member_access = dynamic_cast<MemberAccess*>(bin_op->left.get())) {
-                        if (auto self_ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-                            if (self_ident->name == "self") {
-                                if (initialized_members.find(member_access->member) != initialized_members.end()) {
-                                    skip_stmt = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Check if this is a member variable declaration that's already handled
-        else if (auto var_decl = dynamic_cast<VarDecl*>(stmt.get())) {
-            if (var_decl->var_name.find("self.") == 0) {
-                std::string member_name = var_decl->var_name.substr(5);
-                if (initialized_members.find(member_name) != initialized_members.end()) {
-                    skip_stmt = true;
-                }
-            }
-        }
-
-        if (!skip_stmt) {
-            generateStatement(stmt.get());
-        }
-    }
-
-    // If no statements were generated (all were handled in initializer list),
-    // add a comment to avoid empty constructor body
-    if (constructor->body.empty()) {
-        output << getIndent() << "// constructor body\n";
-    }
 }
 
 void CodeGenerator::extractMemberVariablesFromConstructor(FunctionDef* constructor, ClassDef* cls) {
@@ -573,24 +689,10 @@ void CodeGenerator::extractMemberVariablesFromConstructor(FunctionDef* construct
                     auto new_attr = std::make_unique<VarDecl>();
                     new_attr->var_name = var_decl->var_name;
 
-                    // Copy the type
-                    if (var_decl->type) {
-                        if (auto basic_type = dynamic_cast<BasicType*>(var_decl->type.get())) {
-                            auto new_type = std::make_unique<BasicType>();
-                            new_type->name = basic_type->name;
-                            new_attr->type = std::move(new_type);
-                        }
-                        else if (auto ptr_type = dynamic_cast<PointerType*>(var_decl->type.get())) {
-                            auto new_type = std::make_unique<PointerType>();
-                            if (ptr_type->base_type) {
-                                if (auto base_basic = dynamic_cast<BasicType*>(ptr_type->base_type.get())) {
-                                    auto base_type = std::make_unique<BasicType>();
-                                    base_type->name = base_basic->name;
-                                    new_type->base_type = std::move(base_type);
-                                }
-                            }
-                            new_attr->type = std::move(new_type);
-                        }
+                    // Copy the type (deep, so list[T], dict[K, V] and generics survive)
+                    new_attr->type = cloneType(var_decl->type.get());
+                    if (new_attr->type) {
+                        new_attr->type->is_reference = false; // a member is never a reference
                     }
 
                     // Copy the value if present
@@ -625,10 +727,11 @@ void CodeGenerator::extractMemberVariablesFromConstructor(FunctionDef* construct
                                         // Look for the parameter type
                                         for (const auto& param : constructor->parameters) {
                                             if (param.name == right_ident->name && param.type) {
-                                                if (auto param_basic = dynamic_cast<BasicType*>(param.type.get())) {
-                                                    auto new_type = std::make_unique<BasicType>();
-                                                    new_type->name = param_basic->name;
-                                                    new_attr->type = std::move(new_type);
+                                                new_attr->type = cloneType(param.type.get());
+                                                if (new_attr->type) {
+                                                    // 'const &str' parameter -> plain std::string member
+                                                    new_attr->type->is_reference = false;
+                                                    new_attr->type->is_const = false;
                                                 }
                                                 break;
                                             }
@@ -679,6 +782,7 @@ void CodeGenerator::generateClass(ClassDef* cls) {
     ClassDef* previous_class = current_class;
     current_class = cls;
 
+    generateTemplateHeader(cls->type_params);
     output << getIndent() << "class " << cls->name;
 
     if (!cls->base_class.empty()) {
@@ -710,18 +814,25 @@ void CodeGenerator::generateClass(ClassDef* cls) {
         generateType(attr->type.get());
         output << " " << member_name;
 
-        // ONLY output initializers if explicitly provided in PyCPP source
-        // Don't add default initialization - let constructor handle it
+        // Only a default given in the class body itself is emitted; values assigned in
+        // __init__ go through the constructor's initializer list.
         if (attr->value) {
             output << " = ";
             generateExpression(attr->value.get());
         }
-        // REMOVED: The else block that was adding default initialization
         output << ";\n";
     }
 
-    // Generate methods
+    // Generate methods, separated by blank lines
+    bool first_method = true;
     for (auto& method : cls->methods) {
+        if (first_method) {
+            if (!cls->attributes.empty()) output << "\n";
+            first_method = false;
+        }
+        else {
+            output << "\n";
+        }
         generateFunction(method.get());
     }
 
@@ -824,12 +935,13 @@ void CodeGenerator::generateVarDecl(VarDecl* var) {
 }
 
 void CodeGenerator::generateType(Type* type) {
+    if (type && type->is_const) {
+        output << "const ";
+    }
+
     if (auto basic_type = dynamic_cast<BasicType*>(type)) {
         // Map PyCPP types to C++ types
-        if (basic_type->name == "str") {
-            output << "std::string";
-        }
-        else if (basic_type->name == "std::string") {
+        if (basic_type->name == "str" || basic_type->name == "std::string") {
             output << "std::string";
         }
         else if (basic_type->name == "None" || basic_type->name == "NoneType") {
@@ -837,6 +949,16 @@ void CodeGenerator::generateType(Type* type) {
         }
         else {
             output << basic_type->name;
+        }
+
+        // Generic arguments: Container[int] -> Container<int>
+        if (!basic_type->type_args.empty()) {
+            output << "<";
+            for (size_t i = 0; i < basic_type->type_args.size(); ++i) {
+                if (i > 0) output << ", ";
+                generateType(basic_type->type_args[i].get());
+            }
+            output << ">";
         }
     }
     else if (auto pointer_type = dynamic_cast<PointerType*>(type)) {
@@ -858,6 +980,10 @@ void CodeGenerator::generateType(Type* type) {
     else {
         output << "auto";
     }
+
+    if (type && type->is_reference) {
+        output << "&";
+    }
 }
 
 void CodeGenerator::generateExpression(Expr* expr) {
@@ -868,6 +994,73 @@ void CodeGenerator::generateExpression(Expr* expr) {
 
     // Handle CallExpr first - using the COMPREHENSIVE approach
     if (auto call_expr = dynamic_cast<CallExpr*>(expr)) {
+        // a[i] is indexing, not a call
+        if (call_expr->is_subscript) {
+            generateExpression(call_expr->callee.get());
+            output << "[";
+            for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                if (i > 0) output << ", ";
+                generateExpression(call_expr->arguments[i].get());
+            }
+            output << "]";
+            return;
+        }
+
+        // mem.alloc[T](args) -> new T(args), mem.free(p) -> delete p
+        if (auto mem_member = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
+            auto mem_ident = dynamic_cast<Identifier*>(mem_member->object.get());
+            if (mem_ident && mem_ident->name == "mem" && !lookupVar("mem")) {
+                if (mem_member->member == "alloc" && !call_expr->type_args.empty()) {
+                    output << "new ";
+                    generateType(call_expr->type_args[0].get());
+                    output << "(";
+                    for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                        if (i > 0) output << ", ";
+                        generateExpression(call_expr->arguments[i].get());
+                    }
+                    output << ")";
+                    return;
+                }
+                if (mem_member->member == "free" && call_expr->arguments.size() == 1) {
+                    output << "delete ";
+                    generateExpression(call_expr->arguments[0].get());
+                    return;
+                }
+            }
+        }
+
+        // Name[T](args): explicit generic arguments -> Name<T>(args)
+        if (!call_expr->type_args.empty()) {
+            generateExpression(call_expr->callee.get());
+            output << "<";
+            for (size_t i = 0; i < call_expr->type_args.size(); ++i) {
+                if (i > 0) output << ", ";
+                generateType(call_expr->type_args[i].get());
+            }
+            output << ">(";
+            for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                if (i > 0) output << ", ";
+                generateExpression(call_expr->arguments[i].get());
+            }
+            output << ")";
+            return;
+        }
+
+        // module.function(args): module functions are plain functions in C++
+        if (auto module_member = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
+            if (auto module_ident = dynamic_cast<Identifier*>(module_member->object.get())) {
+                if (imported_modules.count(module_ident->name) > 0 && !lookupVar(module_ident->name)) {
+                    output << module_member->member << "(";
+                    for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                        if (i > 0) output << ", ";
+                        generateExpression(call_expr->arguments[i].get());
+                    }
+                    output << ")";
+                    return;
+                }
+            }
+        }
+
         std::string function_name;
 
         // Extract function name whether it's direct call or member access
@@ -891,10 +1084,11 @@ void CodeGenerator::generateExpression(Expr* expr) {
         if (function_name == "print") {
             output << "std::cout";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                if (i > 0) output << " << ' '";
                 output << " << ";
                 generateExpression(call_expr->arguments[i].get());
             }
-            output << " << std::endl";
+            output << " << '\\n'";
             return;
         }
         else if (function_name == "input") {
@@ -1435,54 +1629,19 @@ void CodeGenerator::generateExpression(Expr* expr) {
             return;
         }
 
-        // Check if this is actually an array access (identifier with single argument)
-        if (auto ident = dynamic_cast<Identifier*>(call_expr->callee.get())) {
-            if (call_expr->arguments.size() == 1) {
-                // This is array access, generate as array subscript
-                output << ident->name << "[";
-                generateExpression(call_expr->arguments[0].get());
-                output << "]";
-                return;
-            }
-        }
-
-        // Handle constructor calls properly
-        if (auto ident = dynamic_cast<Identifier*>(call_expr->callee.get())) {
-            // Check if this identifier is a known class
-            bool is_class_name = false;
-            if (current_class && ident->name == current_class->name) {
-                is_class_name = true;
-            }
-            // Also check other classes in scope (simplified)
-            else if (ident->name == "Player" || ident->name == "Game" ||
-                ident->name.find("Class") != std::string::npos) {
-                is_class_name = true; // Heuristic
-            }
-
-            if (is_class_name) {
-                // Generate constructor call - in C++ this is just ClassName()
-                output << ident->name << "(";
-                for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
-                    generateExpression(call_expr->arguments[i].get());
-                    if (i < call_expr->arguments.size() - 1) {
-                        output << ", ";
-                    }
-                }
-                output << ")";
-                return;
-            }
-        }
-
         // Handle member function calls (non-built-in)
         if (auto member_access = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
             generateExpression(member_access->object.get());
 
-            // Use '.' for objects, '->' only for pointers/this
+            // Use '.' for objects, '->' for pointers and this
             if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
                 if (ident->name == "self" && current_class) {
                     output << "->" << member_access->member << "(";
                 }
                 else if (ident->name == "this") {
+                    output << "->" << member_access->member << "(";
+                }
+                else if (isPointerExpr(ident)) {
                     output << "->" << member_access->member << "(";
                 }
                 else {
@@ -1677,7 +1836,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         output << int_lit->value;
     }
     else if (auto float_lit = dynamic_cast<FloatLiteral*>(expr)) {
-        output << float_lit->value;
+        output << formatDouble(float_lit->value);
     }
     else if (auto str_lit = dynamic_cast<StringLiteral*>(expr)) {
         output << "\"" << str_lit->value << "\"";
@@ -1710,6 +1869,11 @@ void CodeGenerator::generateExpression(Expr* expr) {
             else if (ident->name == "this") {
                 // Handle 'this' directly - use -> for member access
                 output << "this->" << member_access->member;
+            }
+            else if (isPointerExpr(ident)) {
+                // Pointer variable: obj->member
+                generateExpression(member_access->object.get());
+                output << "->" << member_access->member;
             }
             else {
                 // For regular objects, use dot operator
@@ -1807,6 +1971,11 @@ void CodeGenerator::visit(ConstexprDef& node) {
 
 void CodeGenerator::visit(VarDecl& node) {
     generateVarDecl(&node);
+    // Remember the declared type so later member accesses pick '.' or '->' correctly.
+    // 'self.x' declarations are members, not locals.
+    if (node.var_name.find("self.") != 0 && node.type) {
+        declareVar(node.var_name, node.type.get());
+    }
 }
 
 void CodeGenerator::visit(ReturnStmt& node) {
@@ -1819,7 +1988,7 @@ void CodeGenerator::visit(ReturnStmt& node) {
 }
 
 void CodeGenerator::visit(PassStmt& node) {
-    output << getIndent() << "// pass\n";
+    output << getIndent() << (node.is_ellipsis ? "// ...\n" : "// pass\n");
 }
 
 void CodeGenerator::visit(BreakStmt& node) {
@@ -1886,9 +2055,34 @@ void CodeGenerator::visit(WhileStmt& node) {
 }
 
 void CodeGenerator::visit(ForStmt& node) {
-    output << getIndent() << "for (auto " << node.var_name << " : ";
-    if (node.iterable) {
-        generateExpression(node.iterable.get());
+    pushScope();
+    for (const auto& name : node.var_names) declareVar(name, nullptr);
+    if (node.var_names.empty()) declareVar(node.var_name, nullptr);
+
+    if (node.var_names.size() > 1) {
+        // for k, v in d.items(): -> for (auto& [k, v] : d)
+        output << getIndent() << "for (auto& [";
+        for (size_t i = 0; i < node.var_names.size(); ++i) {
+            if (i > 0) output << ", ";
+            output << node.var_names[i];
+        }
+        output << "] : ";
+
+        Expr* iterable = node.iterable.get();
+        if (auto call = dynamic_cast<CallExpr*>(iterable)) {
+            if (auto member = dynamic_cast<MemberAccess*>(call->callee.get())) {
+                if (member->member == "items" && call->arguments.empty()) {
+                    iterable = member->object.get();
+                }
+            }
+        }
+        generateExpression(iterable);
+    }
+    else {
+        output << getIndent() << "for (auto " << node.var_name << " : ";
+        if (node.iterable) {
+            generateExpression(node.iterable.get());
+        }
     }
     output << ") {\n";
     indent();
@@ -1897,8 +2091,8 @@ void CodeGenerator::visit(ForStmt& node) {
     }
     dedent();
     output << getIndent() << "}\n";
+    popScope();
 }
-
 void CodeGenerator::visit(UnsafeBlock& node) {
     output << getIndent() << "// unsafe {\n";
     indent();
@@ -1932,7 +2126,7 @@ void CodeGenerator::visit(IntLiteral& node) {
 }
 
 void CodeGenerator::visit(FloatLiteral& node) {
-    output << node.value;
+    output << formatDouble(node.value);
 }
 
 void CodeGenerator::visit(StringLiteral& node) {

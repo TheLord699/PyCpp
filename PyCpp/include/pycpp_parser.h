@@ -7,12 +7,14 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <set>
 
 class PyCppParser {
 private:
     std::vector<Token> tokens;
     size_t position;
     int current_indent;
+    std::set<std::string> generic_names; // functions/classes declared with [T] parameters
 
     // Helper methods
     Token peek();
@@ -70,6 +72,9 @@ public:
     // Import and use statements
     std::unique_ptr<ImportStmt> parseImportStmt();
     std::unique_ptr<UseStmt> parseUseStmt();
+    std::unique_ptr<ImportStmt> parseFromImportStmt();
+    std::vector<std::string> parseTypeParams();
+    std::vector<std::unique_ptr<Type>> parseTypeArgs();
 
     // Block parsing
     std::vector<std::unique_ptr<Stmt>> parseBlock();
@@ -82,6 +87,7 @@ public:
     std::unique_ptr<Expr> parseComparison();
     std::unique_ptr<Expr> parseTerm();
     std::unique_ptr<Expr> parseFactor();
+    std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseCall(std::unique_ptr<Expr> callee);
     std::unique_ptr<Expr> parseListLiteral();

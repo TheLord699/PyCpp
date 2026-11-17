@@ -6,7 +6,9 @@
 #include <sstream>
 #include <memory>
 #include <set>
+#include <map>
 #include <string>
+#include <vector>
 
 class CodeGenerator : public ASTVisitor {
 private:
@@ -15,6 +17,26 @@ private:
     FunctionDef* current_function;
     ClassDef* current_class;
     std::set<std::string> imported_modules; // identifiers that name an imported module
+
+    // Declared types of the variables currently in scope (innermost scope last).
+    // Used to decide things the syntax alone cannot tell, such as '.' vs '->'.
+    std::vector<std::map<std::string, Type*>> scopes;
+    bool header_mode = false;   // true: emit declarations for the .h file
+    bool needs_utility = false; // set when generated code uses std::move
+
+    void pushScope();
+    void popScope();
+    void declareVar(const std::string& name, Type* type);
+    Type* lookupVar(const std::string& name);
+    bool isPointerExpr(Expr* expr);
+    std::string exprToString(Expr* expr);
+    bool usesSelf(Expr* expr);
+    void generateTemplateHeader(const std::vector<std::string>& params);
+    void generateParameters(FunctionDef* func, bool include_defaults);
+    void generatePrototype(FunctionDef* func);
+    void collectConstructorInitializers(FunctionDef* ctor,
+        std::vector<std::pair<std::string, std::string>>& inits, size_t& consumed_count);
+    std::string formatDouble(double value);
 
     void indent();
     void dedent();
@@ -37,7 +59,11 @@ private:
 
 public:
     CodeGenerator();
+    // Source file (.cpp): function definitions only.
     std::string generate(std::unique_ptr<Program>& program, IncludeManager& include_manager);
+    // Header file (.h): classes, structs, templates, constants and function prototypes.
+    std::string generateHeader(std::unique_ptr<Program>& program, IncludeManager& include_manager,
+        const std::string& guard_name);
 
     // Visitor pattern implementations
     void visit(Program& node) override;

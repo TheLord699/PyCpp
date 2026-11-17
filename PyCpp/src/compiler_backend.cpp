@@ -22,7 +22,7 @@ namespace {
 
 // C++ language standard passed to both compilers, so gcc and MSVC build the
 // generated code the same way.
-const char* const kCppStandard = "17";
+const char* const kCppStandard = "20";
 
 // Visual Studio environment script used when cl.exe is not already on PATH.
 const char* const kVcVarsPath =

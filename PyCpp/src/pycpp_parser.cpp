@@ -1,3 +1,4 @@
+#include <cctype>
 #include "../include/pycpp_parser.h"
 #include <iostream>
 #include <stdexcept>
@@ -8,6 +9,37 @@
 
 PyCppParser::PyCppParser(const std::vector<Token>& tokens)
     : tokens(tokens), position(0), current_indent(0) {
+    // Remember which functions/classes are generic ("def f[T]", "class C[T]") so that
+    // Name[int](...) can be told apart from an ordinary subscript a[i].
+    for (size_t i = 0; i + 2 < this->tokens.size(); ++i) {
+        if ((this->tokens[i].type == TokenType::DEF || this->tokens[i].type == TokenType::CLASS) &&
+            this->tokens[i + 1].type == TokenType::IDENTIFIER &&
+            this->tokens[i + 2].type == TokenType::LBRACKET) {
+            generic_names.insert(this->tokens[i + 1].value);
+        }
+    }
+}
+
+// [T, U] after a function or class name
+std::vector<std::string> PyCppParser::parseTypeParams() {
+    std::vector<std::string> params;
+    if (!match(TokenType::LBRACKET)) return params;
+    do {
+        params.push_back(consume(TokenType::IDENTIFIER, "Expected generic parameter name").value);
+    } while (match(TokenType::COMMA));
+    consume(TokenType::RBRACKET, "Expected ']' after generic parameters");
+    return params;
+}
+
+// [int, str] in an expression: Container[int](42), mem.alloc[Player]()
+std::vector<std::unique_ptr<Type>> PyCppParser::parseTypeArgs() {
+    std::vector<std::unique_ptr<Type>> args;
+    consume(TokenType::LBRACKET, "Expected '[' before type arguments");
+    do {
+        args.push_back(parseType());
+    } while (match(TokenType::COMMA));
+    consume(TokenType::RBRACKET, "Expected ']' after type arguments");
+    return args;
 }
 
 std::unique_ptr<Program> PyCppParser::parse() {
@@ -377,6 +409,10 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
         advance();
         return parseImportStmt();
     }
+    if (check(TokenType::FROM)) {
+        advance();
+        return parseFromImportStmt();
+    }
 
     // Handle template definitions
     if (check(TokenType::TEMPLATE)) {
@@ -417,6 +453,17 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     if (check(TokenType::UNSAFE)) {
         advance();
         return parseUnsafeBlock();
+    }
+
+    // '...' placeholder statement
+    if (check(TokenType::ELLIPSIS)) {
+        auto placeholder = std::make_unique<PassStmt>();
+        placeholder->is_ellipsis = true;
+        placeholder->line = peek().line;
+        placeholder->column = peek().column;
+        advance();
+        match(TokenType::NEWLINE);
+        return placeholder;
     }
 
     // Control flow statements
@@ -496,6 +543,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
         throw std::runtime_error("Expected function name at line " +
             std::to_string(peek().line) + ":" + std::to_string(peek().column));
     }
+    func->type_params = parseTypeParams(); // def f[T](...)
     std::cout << "Parsing function: " << func->name << std::endl;
 
     consume(TokenType::LPAREN, "Expected '(' after function name");
@@ -591,6 +639,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
 
     // Class name
     class_def->name = consume(TokenType::IDENTIFIER, "Expected class name").value;
+    class_def->type_params = parseTypeParams(); // class C[T]:
     std::cout << "Class name: " << class_def->name << std::endl;
 
     // Inheritance (optional)
@@ -1029,15 +1078,45 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
 // ===== Type Parsing =====
 
 std::unique_ptr<Type> PyCppParser::parseType() {
-    // Handle pointer types first
-    if (match(TokenType::STAR)) {
-        auto ptr_type = std::make_unique<PointerType>();
-        ptr_type->base_type = parseType();
-        ptr_type->name = "*" + ptr_type->base_type->name;
-        ptr_type->line = tokens[position - 1].line;
-        ptr_type->column = tokens[position - 1].column;
-        return ptr_type;
+    // 'const' qualifier ('const' is not a keyword token, so it arrives as an identifier)
+    bool is_const = false;
+    if (check(TokenType::IDENTIFIER) && peek().value == "const") {
+        advance();
+        is_const = true;
     }
+
+    // Reference types: &T (mutable) and const &T (immutable)
+    if (match(TokenType::BITWISE_AND)) {
+        auto referenced = parseType();
+        referenced->is_reference = true;
+        if (is_const) referenced->is_const = true;
+        return referenced;
+    }
+
+    // Pointer types: *T and **T (the lexer reads '**' as one DOUBLE_STAR token)
+    if (check(TokenType::STAR) || check(TokenType::DOUBLE_STAR)) {
+        int levels = check(TokenType::DOUBLE_STAR) ? 2 : 1;
+        int line = peek().line;
+        int column = peek().column;
+        advance();
+
+        std::unique_ptr<Type> inner = parseType();
+        for (int i = 0; i < levels; ++i) {
+            auto ptr_type = std::make_unique<PointerType>();
+            ptr_type->base_type = std::move(inner);
+            ptr_type->name = "*" + ptr_type->base_type->name;
+            ptr_type->line = line;
+            ptr_type->column = column;
+            inner = std::move(ptr_type);
+        }
+        if (is_const) inner->is_const = true;
+        return inner;
+    }
+
+    auto finish = [&](std::unique_ptr<Type> t) {
+        if (is_const) t->is_const = true;
+        return t;
+    };
 
     // Handle list types
     if (match(TokenType::LIST)) {
@@ -1049,7 +1128,7 @@ std::unique_ptr<Type> PyCppParser::parseType() {
         list_type->element_type = parseType();
         consume(TokenType::RBRACKET, "Expected ']' after list element type");
         list_type->name = "std::vector<" + list_type->element_type->name + ">";
-        return list_type;
+        return finish(std::move(list_type));
     }
 
     // Handle dict types
@@ -1064,12 +1143,14 @@ std::unique_ptr<Type> PyCppParser::parseType() {
         dict_type->value_type = parseType();
         consume(TokenType::RBRACKET, "Expected ']' after dict value type");
         dict_type->name = "std::map<" + dict_type->key_type->name + "," + dict_type->value_type->name + ">";
-        return dict_type;
+        return finish(std::move(dict_type));
     }
 
     // FIXED: Enhanced type parsing to handle None and all basic types
     if (check(TokenType::IDENTIFIER) ||
         check(TokenType::INT) || check(TokenType::FLOAT) || check(TokenType::DOUBLE) ||
+        check(TokenType::INT32) || check(TokenType::INT64) ||
+        check(TokenType::FLOAT32) || check(TokenType::FLOAT64) || check(TokenType::STRING) ||
         check(TokenType::BOOL) || check(TokenType::STR) || check(TokenType::CHAR) ||
         check(TokenType::VOID) || check(TokenType::AUTO) || check(TokenType::NONE) ||
         check(TokenType::NONE_TYPE)) {
@@ -1082,6 +1163,8 @@ std::unique_ptr<Type> PyCppParser::parseType() {
         // Enhanced type mapping for PyCPP to C++
         static std::unordered_map<std::string, std::string> type_map = {
             {"int", "int"},
+            {"i8", "int8_t"},
+            {"i16", "int16_t"},
             {"i32", "int32_t"},
             {"i64", "int64_t"},
             {"float", "float"},
@@ -1106,7 +1189,16 @@ std::unique_ptr<Type> PyCppParser::parseType() {
             basic_type->name = type_token.value; // User-defined type
         }
 
-        return basic_type;
+        // Generic arguments: Container[int], Pair[str, int]
+        if (check(TokenType::LBRACKET)) {
+            advance(); // '['
+            do {
+                basic_type->type_args.push_back(parseType());
+            } while (match(TokenType::COMMA));
+            consume(TokenType::RBRACKET, "Expected ']' after generic type arguments");
+        }
+
+        return finish(std::move(basic_type));
     }
 
     throw std::runtime_error("Expected type specification, got: " +
@@ -1216,7 +1308,10 @@ std::unique_ptr<ForStmt> PyCppParser::parseForStmt() {
     for_stmt->column = tokens[position - 1].column;
 
     // Loop variable
-    for_stmt->var_name = consume(TokenType::IDENTIFIER, "Expected loop variable name").value;
+    do {
+        for_stmt->var_names.push_back(consume(TokenType::IDENTIFIER, "Expected loop variable name").value);
+    } while (match(TokenType::COMMA));
+    for_stmt->var_name = for_stmt->var_names.front();
     consume(TokenType::IN, "Expected 'in' after loop variable");
 
     // Iterable
@@ -1290,6 +1385,24 @@ std::unique_ptr<ContinueStmt> PyCppParser::parseContinueStmt() {
 }
 
 // ===== Import and Use Statements =====
+
+// from module import name1, name2
+std::unique_ptr<ImportStmt> PyCppParser::parseFromImportStmt() {
+    auto import_stmt = std::make_unique<ImportStmt>();
+    import_stmt->line = tokens[position - 1].line;
+    import_stmt->column = tokens[position - 1].column;
+    import_stmt->is_from = true;
+
+    import_stmt->module = consume(TokenType::IDENTIFIER, "Expected module name after 'from'").value;
+    consume(TokenType::IMPORT, "Expected 'import' after module name");
+
+    do {
+        import_stmt->imports.push_back(consume(TokenType::IDENTIFIER, "Expected name after 'import'").value);
+    } while (match(TokenType::COMMA));
+
+    match(TokenType::NEWLINE);
+    return import_stmt;
+}
 
 std::unique_ptr<ImportStmt> PyCppParser::parseImportStmt() {
     auto import_stmt = std::make_unique<ImportStmt>();
@@ -1759,15 +1872,30 @@ std::unique_ptr<Expr> PyCppParser::parseCall(std::unique_ptr<Expr> callee) {
     return call;
 }
 
+// Prefix operators: -x, +x, &x (address-of), *p (dereference)
+std::unique_ptr<Expr> PyCppParser::parseUnary() {
+    if (check(TokenType::MINUS) || check(TokenType::PLUS) ||
+        check(TokenType::BITWISE_AND) || check(TokenType::STAR)) {
+        Token op_token = advance();
+        auto unary = std::make_unique<UnaryOp>();
+        unary->op = op_token.value;
+        unary->line = op_token.line;
+        unary->column = op_token.column;
+        unary->operand = parseUnary();
+        return unary;
+    }
+    return parsePrimary();
+}
+
 std::unique_ptr<Expr> PyCppParser::parseFactor() {
-    auto expr = parsePrimary();
+    auto expr = parseUnary();
 
     while (true) {
         if (match(TokenType::STAR)) {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "*";
-            op->right = parsePrimary();
+            op->right = parseUnary();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1776,7 +1904,7 @@ std::unique_ptr<Expr> PyCppParser::parseFactor() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "/";
-            op->right = parsePrimary();
+            op->right = parseUnary();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1785,7 +1913,7 @@ std::unique_ptr<Expr> PyCppParser::parseFactor() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "%";
-            op->right = parsePrimary();
+            op->right = parseUnary();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1794,7 +1922,7 @@ std::unique_ptr<Expr> PyCppParser::parseFactor() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "**";
-            op->right = parsePrimary();
+            op->right = parseUnary();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1803,7 +1931,7 @@ std::unique_ptr<Expr> PyCppParser::parseFactor() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "//";
-            op->right = parsePrimary();
+            op->right = parseUnary();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1897,6 +2025,22 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
             ident.line = tokens[position - 1].line;
             ident.column = tokens[position - 1].column;
 
+            // C++ scope qualification (std::sqrt, std::string): the lexer yields two
+            // adjacent ':' tokens, which are folded into the identifier's name.
+            while (position + 2 < tokens.size() &&
+                   tokens[position].type == TokenType::COLON &&
+                   tokens[position + 1].type == TokenType::COLON &&
+                   tokens[position + 1].line == tokens[position].line &&
+                   tokens[position + 1].column == tokens[position].column + 1 &&
+                   !tokens[position + 2].value.empty() &&
+                   (std::isalpha(static_cast<unsigned char>(tokens[position + 2].value[0])) ||
+                    tokens[position + 2].value[0] == '_')) {
+                // After '::' any word is a C++ name, even one that PyCPP lexes as a
+                // keyword (std::sqrt, std::min, std::string, ...).
+                ident.name += "::" + tokens[position + 2].value;
+                position += 3;
+            }
+
             // Handle member access (obj.attr) - UPDATED to use MemberAccess
             while (match(TokenType::DOT)) {
                 if (check(TokenType::IDENTIFIER)) {
@@ -1917,8 +2061,26 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 }
             }
 
+            // Explicit type arguments before a call: mem.alloc[Player](...), Container[int](42)
+            bool takes_type_args = false;
+            if (check(TokenType::LBRACKET)) {
+                if (auto member = dynamic_cast<MemberAccess*>(current_expr.get())) {
+                    auto base = dynamic_cast<Identifier*>(member->object.get());
+                    takes_type_args = base && base->name == "mem";
+                }
+                else if (auto name = dynamic_cast<Identifier*>(current_expr.get())) {
+                    takes_type_args = generic_names.count(name->name) > 0;
+                }
+            }
+
+            if (takes_type_args) {
+                auto type_args = parseTypeArgs();
+                auto call = parseCall(std::move(current_expr));
+                static_cast<CallExpr*>(call.get())->type_args = std::move(type_args);
+                result = std::move(call);
+            }
             // === FIX: Check if it's a function call OR class constructor ===
-            if (check(TokenType::LPAREN)) {
+            else if (check(TokenType::LPAREN)) {
                 // Store the identifier name for constructor detection
                 std::string callee_name = ident.name;
 
@@ -1938,6 +2100,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 // Create a call expression for array access
                 auto array_access = std::make_unique<CallExpr>();
                 array_access->callee = std::move(current_expr);
+                array_access->is_subscript = true;
                 array_access->arguments.push_back(std::move(index));
                 array_access->line = tokens[position - 1].line;
                 array_access->column = tokens[position - 1].column;

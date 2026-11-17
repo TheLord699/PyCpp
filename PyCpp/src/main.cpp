@@ -1,3 +1,4 @@
+#include <cctype>
 #include <iostream>
 #include <fstream>
 #include <memory>
@@ -168,9 +169,14 @@ void generateHeaderAndImplementation(std::unique_ptr<Program>& ast,
         }
     }
 
-    // Generate header file with ALL class/struct/template definitions
-    HeaderGenerator header_gen;
-    std::string header_content = header_gen.generate(ast, base_filename, manual_includes);
+    // Generate the header: class/struct/template/constexpr definitions plus
+    // prototypes of every function the source file defines.
+    std::string guard_name = std::filesystem::path(base_filename).filename().string();
+    for (char& c : guard_name) c = std::isalnum(static_cast<unsigned char>(c)) ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : '_';
+    guard_name += "_H";
+
+    CodeGenerator header_gen;
+    std::string header_content = header_gen.generateHeader(ast, include_manager, guard_name);
 
     std::string header_filename = base_filename + ".h";
     std::ofstream header_file(header_filename);

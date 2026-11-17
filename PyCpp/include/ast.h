@@ -58,10 +58,14 @@ public:
 class Type : public ASTNode {
 public:
     std::string name;
+    bool is_const = false;      // 'const T' / 'const &T'
+    bool is_reference = false;  // '&T' (mutable) or 'const &T' (immutable)
 };
 
 class BasicType : public Type {
 public:
+    // Generic arguments, e.g. Container[int] -> type_args = { int }
+    std::vector<std::unique_ptr<Type>> type_args;
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -149,6 +153,10 @@ class CallExpr : public Expr {
 public:
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> arguments;
+    // Explicit generic arguments: mem.alloc[Player](...), Container[int](42)
+    std::vector<std::unique_ptr<Type>> type_args;
+    // true for a[i] (indexing), false for f(x) (a call)
+    bool is_subscript = false;
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -205,6 +213,7 @@ public:
 
 class PassStmt : public Stmt {
 public:
+    bool is_ellipsis = false; // the '...' placeholder statement
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -236,7 +245,8 @@ public:
 
 class ForStmt : public Stmt {
 public:
-    std::string var_name;
+    std::string var_name;                // first loop variable
+    std::vector<std::string> var_names;  // all loop variables: for k, v in ...
     std::unique_ptr<Expr> iterable;
     std::vector<std::unique_ptr<Stmt>> body;
     void accept(ASTVisitor& visitor) override;
@@ -257,6 +267,7 @@ public:
 class FunctionDef : public Stmt {
 public:
     std::string name;
+    std::vector<std::string> type_params; // def f[T, U](...)
     std::vector<Parameter> parameters;
     std::unique_ptr<Type> return_type;
     std::vector<std::unique_ptr<Stmt>> body;
@@ -266,6 +277,7 @@ public:
 class ClassDef : public Stmt {
 public:
     std::string name;
+    std::vector<std::string> type_params; // class C[T]:
     std::string base_class;
     std::vector<std::unique_ptr<VarDecl>> attributes;
     std::vector<std::unique_ptr<FunctionDef>> methods;
@@ -299,6 +311,7 @@ class ImportStmt : public Stmt {
 public:
     std::string module;
     std::vector<std::string> imports;
+    bool is_from = false; // from module import a, b
     void accept(ASTVisitor& visitor) override;
 };
 

@@ -43,7 +43,13 @@ Supported syntax:
 Example:
 
 ```
-def main() -> int:    age: int = 18    if age >= 18:        print("Adult")    else:        print("Minor")    return 0
+def main() -> int:
+    age: int = 18
+    if age >= 18:
+        print("Adult")
+    else:
+        print("Minor")
+    return 0
 ```
 
 The compiler automatically handles C++ syntax generation.
@@ -90,7 +96,13 @@ The objective is to make ordinary function calls simple while allowing developer
 ### **4.1 Default passing**
 
 ```
-def print_player(player: Player) -> void:    print(player.name)def main() -> int:    player: Player = Player("Alex", 100)    print_player(player)    return 0
+def print_player(player: Player) -> void:
+    print(player.name)
+
+def main() -> int:
+    player: Player = Player("Alex", 100)
+    print_player(player)
+    return 0
 ```
 
 Developers don't need to manually specify pointers or references for every function call.
@@ -102,7 +114,13 @@ The declared parameter type determines the passing semantics.
 Use `&T` when a function needs to modify an existing object.
 
 ```
-def damage_player(player: &Player) -> void:    player.health -= 10def main() -> int:    player: Player = Player("Alex", 100)    damage_player(player)    return 0
+def damage_player(player: &Player) -> void:
+    player.health -= 10
+
+def main() -> int:
+    player: Player = Player("Alex", 100)
+    damage_player(player)
+    return 0
 ```
 
 The object is passed by reference rather than copied.
@@ -112,7 +130,9 @@ The object is passed by reference rather than copied.
 Use `const &T` when a function needs to inspect an object without modifying it.
 
 ```
-def inspect_player(player: const &Player) -> void:    print(player.name)    print(player.health)
+def inspect_player(player: const &Player) -> void:
+    print(player.name)
+    print(player.health)
 ```
 
 This is particularly useful for large objects.
@@ -122,7 +142,9 @@ This is particularly useful for large objects.
 Use `*T` for explicit pointer access.
 
 ```
-def update_player(player: *Player) -> void:    unsafe:        player.health -= 10
+def update_player(player: *Player) -> void:
+    unsafe:
+        player.health -= 10
 ```
 
 Pointers allow developers to perform lower-level operations when needed.
@@ -132,7 +154,9 @@ Pointers allow developers to perform lower-level operations when needed.
 PyCPP also supports multiple pointer levels.
 
 ```
-def change_pointer(player: **Player) -> void:    unsafe:        ...
+def change_pointer(player: **Player) -> void:
+    unsafe:
+        ...
 ```
 
 ### **4.6 Generic functions**
@@ -140,7 +164,14 @@ def change_pointer(player: **Player) -> void:    unsafe:        ...
 PyCPP supports C++ templates through Pythonic generic syntax.
 
 ```
-def print_value[T](value: T) -> void:    print(value)def main() -> int:    print_value(100)    print_value("Hello")    print_value(3.14)    return 0
+def print_value[T](value: T) -> void:
+    print(value)
+
+def main() -> int:
+    print_value(100)
+    print_value("Hello")
+    print_value(3.14)
+    return 0
 ```
 
 Each call is type-checked at compile time.
@@ -165,7 +196,12 @@ PyCPP provides manual memory management without a garbage collector.
 Memory can be allocated and freed explicitly.
 
 ```
-def main() -> int:    player: *Player = mem.alloc[Player]()    unsafe:        player.health = 100    mem.free(player)    return 0
+def main() -> int:
+    player: *Player = mem.alloc[Player]()
+    unsafe:
+        player.health = 100
+    mem.free(player)
+    return 0
 ```
 
 Features:
@@ -188,7 +224,12 @@ Future enhancements:
 PyCPP supports standard control flow with Python-like syntax.
 
 ```
-def main() -> int:    for i in range(10):        if i == 5:            continue        print(i)    return 0
+def main() -> int:
+    for i in range(10):
+        if i == 5:
+            continue
+        print(i)
+    return 0
 ```
 
 Supported:
@@ -215,7 +256,22 @@ PyCPP supports classes, constructors, instance variables, and inheritance.
 No manually managed header files are required.
 
 ```
-class Player:    def __init__(self, name: str, health: int):        self.name: str = name        self.health: int = health    def damage(self, amount: int) -> void:        self.health -= amountdef main() -> int:    player: Player = Player("Alex", 100)    player.damage(20)    print(player.health)    return 0
+class Player:
+    def __init__(self, name: str, health: int):
+        self.name: str = name
+        self.health: int = health
+
+    def damage(self, amount: int) -> void:
+        self.health -= amount
+
+def main() -> int:
+    player: Player = Player("Alex", 100)
+
+    player.damage(20)
+
+    print(player.health)
+
+    return 0
 ```
 
 Features:
@@ -316,7 +372,14 @@ Notes:
 Structs provide lightweight data-only containers.
 
 ```
-struct Vector2:    x: float    y: floatdef main() -> int:    position: Vector2 = Vector2(10.0, 20.0)    print(position.x)    return 0
+struct Vector2:
+    x: float
+    y: float
+
+def main() -> int:
+    position: Vector2 = Vector2(10.0, 20.0)
+    print(position.x)
+    return 0
 ```
 
 Structs compile to native C++ structs.
@@ -341,13 +404,23 @@ PyCPP integrates directly with the C++ STL.
 Example:
 
 ```
-def main() -> int:    numbers: list[int] = [1, 2, 3, 4, 5]    for number in numbers:        print(number)    return 0
+def main() -> int:
+    numbers: list[int] = [1, 2, 3, 4, 5]
+    for number in numbers:
+        print(number)
+    return 0
 ```
 
 Dictionary iteration:
 
 ```
-players: dict[str, int] = {    "Alex": 100,    "Sam": 80}for name, health in players.items():    print(name, health)
+players: dict[str, int] = {
+    "Alex": 100,
+    "Sam": 80
+}
+
+for name, health in players.items():
+    print(name, health)
 ```
 
 The compiler automatically detects required standard library headers.
@@ -359,13 +432,18 @@ PyCPP supports native C++ templates through Pythonic syntax.
 Generic functions:
 
 ```
-def maximum[T](a: T, b: T) -> T:    if a > b:        return a    return b
+def maximum[T](a: T, b: T) -> T:
+    if a > b:
+        return a
+    return b
 ```
 
 Generic classes:
 
 ```
-class Container[T]:    def __init__(self, value: T):        self.value: T = value
+class Container[T]:
+    def __init__(self, value: T):
+        self.value: T = value
 ```
 
 Templates compile into native C++ templates.
@@ -377,7 +455,8 @@ This allows compatibility with the STL and user-defined types.
 PyCPP supports compile-time constants through `constexpr`.
 
 ```
-constexpr MAX_PLAYERS: int = 100constexpr PI: double = 3.141592653589793
+constexpr MAX_PLAYERS: int = 100
+constexpr PI: double = 3.141592653589793
 ```
 
 These values are evaluated at compile time where possible.
@@ -387,7 +466,8 @@ These values are evaluated at compile time where possible.
 PyCPP uses Python-style imports for PyCPP source files.
 
 ```
-from player import Playerimport game_utils
+from player import Player
+import game_utils
 ```
 
 There is no requirement to manually create or include header files.
@@ -401,7 +481,8 @@ PyCPP is designed to work alongside existing C and C++ libraries.
 Developers can directly include external headers when necessary.
 
 ```
-use <iostream>use <cmath>
+use <iostream>
+use <cmath>
 ```
 
 This allows access to existing C++ functionality.

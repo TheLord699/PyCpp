@@ -1,464 +1,492 @@
-
-!!NOTE: THIS ENTIRE PROJECT IS AI!!
-
-
 # **PyCPP — Pythonic Syntax, Native C++ Power**
 
-> **Write like Python. Compile like C++. Run at native speed.**
+**Write like Python. Compile like C++. Run at native speed.**
 
----
+PyCPP is a statically typed, indentation-based programming language that compiles directly to modern C++20 or later.
 
-## Overview
+It combines Python's simplicity and readability with C++'s performance, control, and flexibility, without requiring a runtime or garbage collector.
 
-**PyCPP** is a statically typed, indentation-based programming language that compiles directly to **modern C++**.
+The goal is simple: **Everything C++ can do, PyCPP should be able to do — with cleaner, more Pythonic syntax.**
 
-It combines the **simplicity and readability of Python** with the **performance and control of C++**, without any runtime overhead.
+# **1. Core Features**
 
-### Core Idea
+- Python-inspired syntax with C++ semantics.
+- Fully static type system.
+- Direct compilation to native C++.
+- No virtual machine or runtime overhead.
+- Automatic standard library header detection.
+- Native STL integration.
+- Headerless development — no `.h` or `.hpp` files.
+- Full C/C++ interoperability.
+- Manual memory management.
+- Optional unsafe operations.
+- Templates and compile-time evaluation.
+- Python-like imports and modules.
+- Flexible function argument passing.
+- Native classes, structs, and inheritance.
 
-> If C++ can do it, **PyCPP can too** — but with **cleaner, more Pythonic syntax** and **automatic header and memory management**.
+# **2. Syntax**
 
----
+PyCPP uses indentation to define blocks instead of braces `{}` and semicolons `;`.
 
-## Highlights
+It aims to feel familiar to Python developers while maintaining predictable C++ semantics.
 
-- **Pythonic syntax**, **C++ semantics**
-- **Static typing** — no runtime overhead
-- **Python-style OOP** — classes, `self`, constructors, methods, and inheritance
-- **Native STL integration** — `list`, `dict`, `str` backed by `std::vector`, `std::map`, `std::string`
-- **Smart Include System** — automatically includes only standard libraries when needed
-- **Headerless design** — no `.h` or `.hpp` files
-- **Full C/C++ interop** via `use <header>`
-- **Manual memory control** with optional unsafe blocks
-- **Flexible argument passing** — simple Pythonic calls with explicit C++-style control
-- **References, pointers, and ownership control**
-- **Generic functions** using native C++ templates
-- **Compile-time constants**, **templates**, **structs**
-- **Native performance** equal to compiled C++
+Supported syntax:
 
----
+- `def` — functions.
+- `class` — classes.
+- `struct` — data structures.
+- `if`, `elif`, `else` — conditional statements.
+- `for`, `while` — loops.
+- `break`, `continue`, `return` — flow control.
 
-## 1. Syntax
+Example:
 
-PyCPP uses indentation to define blocks — no braces `{}` or semicolons `;`.
-
-Its syntax closely resembles Python, while enforcing C++-like static typing.
-
-- `def` for functions
-- `class` and `struct` for types
-- Python-style control flow (`if`, `elif`, `else`, `for`, `while`)
-- `break`, `continue`, and `return` all supported
-- Automatic `return 0` in `main()` if omitted
-
-Future enhancements include **list comprehensions** and **slicing**.
-
----
-
-## 2. Typing System
-
-PyCPP is fully **statically typed**, with every variable, function argument, and return type declared explicitly.
-
-### Supported Types
-
-- Primitive types (`int`, `float`, `double`, `bool`, `str`)
-- STL-backed types (`list[T]`, `dict[K,V]`)
-- Pointer types (`*T`)
-- Reference types (`&T`)
-- Type aliases:
-  - Integers: `i8`, `i16`, `i32`, `i64`
-  - Floats: `f32`, `f64`
-
-Type-safe operations are enforced at compile-time.
-
-Optional **type inference** is planned for the future.
-
----
-
-## 3. Memory Management
-
-PyCPP gives full manual control over memory allocation — no garbage collector.
-
-- Allocate and free memory manually using `mem.alloc()` and `mem.free()`
-- Perform pointer arithmetic inside `unsafe:` blocks
-- References provide direct access to existing objects
-- Explicit pointers allow low-level memory manipulation
-- Outside unsafe blocks, strict safety checks are enforced
-- No automatic garbage collection
-- Future versions will introduce **RAII wrappers** for safer automatic memory cleanup
-
----
-
-## 4. Control Flow
-
-Supports all common control flow structures with Python-like syntax:
-
-- `if`, `elif`, `else`
-- `while`, `for`
-- `break`, `continue`
-
-Future versions will add **exception handling** (`try/except`).
-
----
-
-## 5. Functions
-
-Functions are defined using Python-style syntax with **required return types**.
-
-Default parameters and native C++ type returns are supported.
-
-- Functions cannot be overloaded yet (planned)
-- Pythonic function bodies generate standard C++ functions
-- Simple function calls use clean, Python-like syntax
-- Explicit references and pointers allow greater control over argument passing
-- Generic functions support reusable code across multiple statically typed types through templates
-
-### Pythonic Argument Passing
-
-PyCPP allows developers to pass objects naturally, without requiring explicit pointer or reference syntax in every function call.
-
-```python
-def print_player(player: Player) -> void:
-    print(player.name)
-
-def main() -> int:
-    player: Player = Player("Alex", 100)
-
-    print_player(player)
-    return 0
+```
+def main() -> int:    age: int = 18    if age >= 18:        print("Adult")    else:        print("Minor")    return 0
 ```
 
-### Explicit Reference Passing
+The compiler automatically handles C++ syntax generation.
 
-For functions that need to modify an existing object, developers can explicitly request a mutable reference.
+# **3. Type System**
 
-```python
-def damage_player(player: &Player) -> void:
-    player.health -= 10
+PyCPP is fully statically typed.
 
-def main() -> int:
-    player: Player = Player("Alex", 100)
+Every variable, function parameter, and return type must have an explicitly declared type.
 
-    damage_player(player)
-    return 0
+Supported types:
+
+| PyCPP    | C++ equivalent |
+| -------- | -------------- |
+| `int`    | `int`          |
+| `i8`     | `int8_t`       |
+| `i16`    | `int16_t`      |
+| `i32`    | `int32_t`      |
+| `i64`    | `int64_t`      |
+| `float`  | `float`        |
+| `double` | `double`       |
+| `f32`    | `float`        |
+| `f64`    | `double`       |
+| `bool`   | `bool`         |
+| `str`    | `std::string`  |
+
+Additional types:
+
+- `list[T]` — `std::vector<T>`.
+- `dict[K, V]` — `std::map<K, V>`.
+- `*T` — pointer to T.
+- `&T` — reference to T.
+
+Type safety is enforced at compile time.
+
+Type inference may be introduced in a future version.
+
+# **4. Function Argument System**
+
+PyCPP provides Python-like function calls with the ability to access lower-level C++ argument semantics.
+
+The objective is to make ordinary function calls simple while allowing developers to control exactly how objects are passed.
+
+### **4.1 Default passing**
+
+```
+def print_player(player: Player) -> void:    print(player.name)def main() -> int:    player: Player = Player("Alex", 100)    print_player(player)    return 0
 ```
 
-### Immutable Reference Passing
+Developers don't need to manually specify pointers or references for every function call.
 
-When a function only needs to read an object, it can accept an immutable reference.
+The declared parameter type determines the passing semantics.
 
-```python
-def inspect_player(player: const &Player) -> void:
-    print(player.name)
-    print(player.health)
+### **4.2 Reference passing**
+
+Use `&T` when a function needs to modify an existing object.
+
+```
+def damage_player(player: &Player) -> void:    player.health -= 10def main() -> int:    player: Player = Player("Alex", 100)    damage_player(player)    return 0
 ```
 
-### Pointer Passing
+The object is passed by reference rather than copied.
 
-For lower-level memory operations, PyCPP supports explicit pointer types.
+### **4.3 Immutable references**
 
-```python
-def update_player(player: *Player) -> void:
-    unsafe:
-        player.health = 50
+Use `const &T` when a function needs to inspect an object without modifying it.
+
+```
+def inspect_player(player: const &Player) -> void:    print(player.name)    print(player.health)
 ```
 
-### Argument Passing Semantics
+This is particularly useful for large objects.
 
-| Parameter syntax | Semantics |
-|---|---|
-| `value: T` | Pass by value; creates an independent copy |
-| `value: &T` | Mutable reference to the original object |
-| `value: const &T` | Immutable reference to the original object |
-| `value: *T` | Pointer to an object |
-| `value: **T` | Pointer to a pointer |
+### **4.4 Pointer passing**
 
-**Core rules:**
+Use `*T` for explicit pointer access.
 
-1. Ordinary `T` parameters always have value semantics.
-2. Mutable references must be explicitly declared using `&T`.
-3. Immutable references use `const &T`.
-4. Pointers provide explicit low-level memory access.
-5. The compiler must never silently change value semantics into reference semantics.
-6. The compiler may optimize generated C++ code as long as observable PyCPP semantics remain unchanged.
+```
+def update_player(player: *Player) -> void:    unsafe:        player.health -= 10
+```
 
-**Design principle: Explicit semantics, optimized execution.**
+Pointers allow developers to perform lower-level operations when needed.
 
----
+### **4.5 Pointer-to-pointer**
 
-## 6. Collections
+PyCPP also supports multiple pointer levels.
 
-PyCPP provides Pythonic collections backed by the C++ STL.
+```
+def change_pointer(player: **Player) -> void:    unsafe:        ...
+```
 
-| PyCPP | C++ Equivalent |
-|---|---|
-| `list[T]` | `std::vector<T>` |
-| `dict[K,V]` | `std::map<K,V>` |
-| `str` | `std::string` |
+### **4.6 Generic functions**
 
-### Supported Features
+PyCPP supports C++ templates through Pythonic generic syntax.
 
-- Direct iteration (`for x in nums:`)
-- Key/value iteration (`for k, v in items.items():`)
-- Automatic header detection and inclusion
+```
+def print_value[T](value: T) -> void:    print(value)def main() -> int:    print_value(100)    print_value("Hello")    print_value(3.14)    return 0
+```
 
-Future enhancements include **slicing** and **comprehensions**.
+Each call is type-checked at compile time.
 
----
+### **Argument syntax summary**
 
-## 7. Classes (Pythonic OOP)
+| Syntax                         | Meaning                              |
+| ------------------------------ | ------------------------------------ |
+| `value: T`                     | Value parameter                      |
+| `value: &T`                    | Mutable reference                    |
+| `value: const &T`              | Immutable reference                  |
+| `value: *T`                    | Pointer                              |
+| `value: **T`                   | Pointer to pointer                   |
+| `value: T` in generic function | Template parameter when T is generic |
 
-PyCPP supports Python-inspired object-oriented programming while compiling classes directly into native C++ classes.
+**Design principle:** Python-like simplicity by default, C++-level control when requested.
 
-Classes use Python-style syntax, including:
+# **5. Memory Management**
 
-- `__init__` for constructors
-- `self` for accessing the current instance
-- Instance attributes with explicit static types
-- Instance methods
-- Class inheritance
-- Method calls using dot notation
-- Direct access to instance members according to their access rules
+PyCPP provides manual memory management without a garbage collector.
 
-### Basic Class Example
+Memory can be allocated and freed explicitly.
+
+```
+def main() -> int:    player: *Player = mem.alloc[Player]()    unsafe:        player.health = 100    mem.free(player)    return 0
+```
+
+Features:
+
+- `mem.alloc()` — allocate memory.
+- `mem.free()` — release memory.
+- `unsafe:` — enable explicitly unsafe operations.
+- Pointer arithmetic.
+- Direct memory manipulation.
+
+Future enhancements:
+
+- RAII wrappers.
+- Ownership tracking.
+- Move semantics.
+- Safer automatic cleanup.
+
+# **6. Control Flow**
+
+PyCPP supports standard control flow with Python-like syntax.
+
+```
+def main() -> int:    for i in range(10):        if i == 5:            continue        print(i)    return 0
+```
+
+Supported:
+
+- `if`
+- `elif`
+- `else`
+- `for`
+- `while`
+- `break`
+- `continue`
+- `return`
+
+Future enhancements:
+
+- Exception handling.
+- `try` / `except`.
+- Additional iteration utilities.
+
+# **7. Classes and Object-Oriented Programming**
+
+PyCPP supports classes, constructors, instance variables, and inheritance.
+
+No manually managed header files are required.
+
+```
+class Player:    def __init__(self, name: str, health: int):        self.name: str = name        self.health: int = health    def damage(self, amount: int) -> void:        self.health -= amountdef main() -> int:    player: Player = Player("Alex", 100)    player.damage(20)    print(player.health)    return 0
+```
+
+Features:
+
+- Constructors through `__init__`.
+- Typed instance variables.
+- Methods.
+- Inheritance.
+- Native C++ class generation.
+- Automatic header management.
+
+### **7.1 High-level vs low-level: what the compiler generates**
+
+The PyCPP you write (high level) and the C++20 the compiler produces from it (low level), side by side.
+
+**High level — PyCPP (`main.pycpp`)**
 
 ```python
 class Player:
-    def __init__(self, name: str, health: int) -> void:
+    def __init__(self, name: str, health: int):
         self.name: str = name
         self.health: int = health
 
-    def take_damage(self, amount: int) -> void:
+    def damage(self, amount: int) -> void:
         self.health -= amount
 
-    def heal(self, amount: int) -> void:
-        self.health += amount
-
-    def display(self) -> void:
-        print(self.name)
-        print(self.health)
-```
-
-### Creating Objects
-
-```python
 def main() -> int:
     player: Player = Player("Alex", 100)
 
-    player.display()
+    player.damage(20)
 
-    player.take_damage(25)
-    player.display()
-
-    player.heal(10)
-    player.display()
+    print(player.health)
 
     return 0
 ```
 
-### Understanding `self`
+**Low level — generated C++20 (`main.cpp`)**
 
-`self` represents the current instance of a class.
+```cpp
+#include <iostream>   // added automatically: print()
+#include <string>     // added automatically: str
+#include <utility>    // added automatically: std::move
 
-It allows methods to access and modify the object's own attributes.
+class Player {
+public:
+    std::string name;
+    int health;
 
-```python
-class Counter:
-    def __init__(self) -> void:
-        self.value: int = 0
+    Player(std::string name, int health)
+        : name(std::move(name)), health(health) {}
 
-    def increment(self) -> void:
-        self.value += 1
+    void damage(int amount) {
+        this->health -= amount;
+    }
+};
 
-    def reset(self) -> void:
-        self.value = 0
+int main() {
+    Player player = Player("Alex", 100);
 
-    def get_value(self) -> int:
-        return self.value
+    player.damage(20);
+
+    std::cout << player.health << '\n';
+
+    return 0;
+}
 ```
 
-Using `self` avoids needing to explicitly pass the current object into every method call.
+Output:
 
-The compiler automatically translates `self` into the appropriate C++ instance access.
-
-### Class Inheritance
-
-PyCPP supports Python-style inheritance.
-
-```python
-class Animal:
-    def __init__(self, name: str) -> void:
-        self.name: str = name
-
-    def speak(self) -> void:
-        print("Animal sound")
-
-
-class Dog(Animal):
-    def __init__(self, name: str, breed: str) -> void:
-        super().__init__(name)
-        self.breed: str = breed
-
-    def bark(self) -> void:
-        print("Woof!")
+```
+80
 ```
 
-### Using Inherited Classes
+**How each part translates**
 
-```python
-def main() -> int:
-    dog: Dog = Dog("Buddy", "Labrador")
+| PyCPP                                   | Generated C++                                         |
+| --------------------------------------- | ----------------------------------------------------- |
+| `class Player:`                         | `class Player { public: ... };`                       |
+| `self.name: str = name` in `__init__`   | Member `std::string name;` + constructor initializer  |
+| `def __init__(self, name: str, ...)`    | Constructor `Player(std::string name, ...)`           |
+| `def damage(self, amount: int) -> void` | Member function `void damage(int amount)`             |
+| `self.health`                           | `this->health`                                        |
+| `def main() -> int:`                    | `int main()`                                          |
+| `player: Player = Player("Alex", 100)`  | `Player player = Player("Alex", 100);`                |
+| `print(player.health)`                  | `std::cout << player.health << '\n';`                 |
+| Indentation                             | Braces `{}` and semicolons `;`                        |
+| (nothing)                               | `#include` lines, detected by the Smart Include System |
 
-    print(dog.name)
-    print(dog.breed)
+Notes:
 
-    dog.speak()
-    dog.bark()
+- Typed `self.x: T` assignments in `__init__` become class members, and are initialised in the constructor's initializer list rather than assigned in its body.
+- A `str` parameter taken by value is moved into the member (`std::move`), so constructing a `Player` costs no extra string copy.
+- Class members are `public` by default, matching Python's attribute access.
+- `print()` writes `'\n'` rather than `std::endl`, so it doesn't force a flush on every call.
 
-    return 0
+# **8. Structs**
+
+Structs provide lightweight data-only containers.
+
+```
+struct Vector2:    x: float    y: floatdef main() -> int:    position: Vector2 = Vector2(10.0, 20.0)    print(position.x)    return 0
 ```
 
-### OOP Design Principles
+Structs compile to native C++ structs.
 
-- `self` is automatically available inside instance methods.
-- `self.attribute: Type` declares a typed instance attribute.
-- Instance methods can read and modify their own attributes.
-- Constructors use `__init__`.
-- Inheritance allows classes to extend other classes.
-- `super()` provides access to parent-class functionality.
-- Classes compile into native C++ classes.
-- No Python object model or Python runtime is required.
+Features:
 
----
+- Public members.
+- Typed fields.
+- Optional default values.
+- No methods or inheritance.
 
-## 8. Structs
+# **9. Collections**
 
-Lightweight, data-only containers that compile to `struct` with public members.
+PyCPP integrates directly with the C++ STL.
 
-- Declared using `struct`
-- No methods or inheritance
-- Optional default values
-- Explicitly typed members
+| PyCPP       | C++              |
+| ----------- | ---------------- |
+| `list[T]`   | `std::vector<T>` |
+| `dict[K,V]` | `std::map<K,V>`  |
+| `str`       | `std::string`    |
 
-Ideal for POD-like data transfer objects.
+Example:
 
-### Example
-
-```python
-struct Vector2:
-    x: float = 0.0
-    y: float = 0.0
-
-def main() -> int:
-    position: Vector2 = Vector2(10.0, 20.0)
-
-    print(position.x)
-    print(position.y)
-
-    return 0
+```
+def main() -> int:    numbers: list[int] = [1, 2, 3, 4, 5]    for number in numbers:        print(number)    return 0
 ```
 
----
+Dictionary iteration:
 
-## 9. Templates
-
-Supports **C++ templates** using Pythonic syntax for both classes and functions.
-
-- Templates compile 1:1 to standard C++ templates
-- Syntax simplified for readability
-- Fully compatible with STL and user-defined types
-
-### Generic Functions
-
-Generic functions allow developers to write reusable code that accepts different types while maintaining static type safety.
-
-```python
-def print_value[T](value: T) -> void:
-    print(value)
-
-def main() -> int:
-    print_value(100)
-    print_value("Hello")
-    print_value(3.14)
-
-    return 0
+```
+players: dict[str, int] = {    "Alex": 100,    "Sam": 80}for name, health in players.items():    print(name, health)
 ```
 
-These functions compile into native C++ templates.
+The compiler automatically detects required standard library headers.
 
-Generic functions preserve compile-time type checking without requiring a dynamic object system or runtime type information.
+# **10. Templates**
 
----
+PyCPP supports native C++ templates through Pythonic syntax.
 
-## 10. Constexpr
+Generic functions:
 
-Supports compile-time constants via `constexpr`.
-
-Used for mathematical or configuration constants evaluated at compile-time.
-
-```python
-constexpr MAX_PLAYERS: int = 100
-constexpr GAME_SPEED: float = 1.5
+```
+def maximum[T](a: T, b: T) -> T:    if a > b:        return a    return b
 ```
 
-This allows developers to take advantage of C++ compile-time evaluation through Pythonic syntax.
+Generic classes:
 
----
-
-## 11. Imports & Modules
-
-### Pythonic Imports — *Only for PyCPP Files*
-
-PyCPP supports Python-style imports for its own source files.
-
-```python
-from player import Player
-import game_utils
+```
+class Container[T]:    def __init__(self, value: T):        self.value: T = value
 ```
 
-- Modules are designed specifically for PyCPP source files.
-- Imported symbols are resolved by the PyCPP compiler.
-- No manual header management is required.
-- The compiler handles necessary C++ declarations and dependencies internally.
+Templates compile into native C++ templates.
 
-### C/C++ Interoperability
+This allows compatibility with the STL and user-defined types.
 
-PyCPP also supports direct interaction with existing C and C++ libraries.
+# **11. Constexpr**
 
-```python
-use <iostream>
-use <vector>
+PyCPP supports compile-time constants through `constexpr`.
+
+```
+constexpr MAX_PLAYERS: int = 100constexpr PI: double = 3.141592653589793
 ```
 
-The compiler automatically handles the required integration with native C++ headers.
+These values are evaluated at compile time where possible.
 
----
+# **12. Imports and Modules**
 
-## 12. Design Philosophy
+PyCPP uses Python-style imports for PyCPP source files.
 
-PyCPP aims to combine three programming language philosophies:
+```
+from player import Playerimport game_utils
+```
 
-- **Python:** Simple, readable syntax, natural object interaction, and approachable OOP.
-- **Odin:** Explicit control over memory, references, pointers, and low-level operations.
-- **C++:** Native compilation, performance, templates, and systems-level capabilities.
+There is no requirement to manually create or include header files.
 
-### The PyCPP Principle
+The compiler manages dependencies and generates the necessary C++ includes.
 
-> **Simple by default. Explicit when needed. Powerful without compromise.**
+# **13. C/C++ Interoperability**
 
-Developers should be able to write straightforward code without unnecessary complexity, while retaining access to the low-level capabilities expected from a systems programming language.
+PyCPP is designed to work alongside existing C and C++ libraries.
 
-PyCPP is designed to make systems programming more approachable without sacrificing the control, predictability, and performance of native C++.
+Developers can directly include external headers when necessary.
 
----
+```
+use <iostream>use <cmath>
+```
 
-## Project Vision
+This allows access to existing C++ functionality.
 
-PyCPP aims to make native systems programming feel natural.
+The objective is to avoid reinventing functionality that C++ already provides.
 
-You should be able to create objects, call methods, pass arguments, manage memory, work with collections, and build complex applications using readable Python-inspired syntax.
+# **14. Smart Include System**
 
-But underneath, everything compiles into real C++.
+PyCPP automatically detects which standard libraries are needed.
 
-**No Python interpreter. No garbage collector. No mandatory runtime. Just native code.**
+For example:
 
-> **PyCPP — Pythonic to write. Native to run.**
+```
+numbers: list[int] = [1, 2, 3]
+```
+
+Automatically generates the required:
+
+```
+#include <vector>
+```
+
+Developers don't need to manually manage standard library headers.
+
+Only necessary headers should be included.
+
+# **15. Compilation**
+
+PyCPP compiles directly to modern C++.
+
+**Compilation pipeline**
+
+**PyCPP source**
+
+main.pycpp
+
+**PyCPP compiler**
+
+Parsing · Type checking · Code generation
+
+**Generated C++**
+
+Modern C++ source
+
+**Native executable**
+
+Compiled using GCC, Clang or another supported compiler
+
+PyCPP introduces no mandatory virtual machine or garbage collector.
+
+Performance should be comparable to equivalent C++ code when the generated code and compiler optimizations are equivalent.
+
+# **16. Future Development**
+
+Potential future features include:
+
+- List comprehensions.
+- Slicing.
+- Exception handling.
+- Function overloading.
+- Type inference.
+- Ownership and move semantics.
+- RAII wrappers.
+- Advanced compile-time metaprogramming.
+- Improved C++ interoperability.
+- Expanded standard library.
+
+# **17. Design Philosophy**
+
+PyCPP follows five core principles:
+
+1. **Readable:** Code should look and feel like Python.
+2. **Powerful:** Developers should have access to C++ capabilities.
+3. **Predictable:** Static typing and explicit semantics should make behavior understandable.
+4. **Native:** Generated code should compile directly to native machine code.
+5. **Flexible:** Beginners should be able to write simple code, while advanced developers retain low-level control.
+
+# **The PyCPP Vision**
+
+# **PyCPP**
+
+## Pythonic Syntax. Native C++ Power.
+
+Write less boilerplate. Keep complete control. Get native performance.
+
+**The simplicity of Python. The power of C++.**
+
+*Note: PyCPP is an AI-designed language project. Features described as supported represent the proposed language specification; future enhancements are planned rather than necessarily implemented.*

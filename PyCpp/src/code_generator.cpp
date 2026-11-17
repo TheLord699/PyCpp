@@ -1,3 +1,4 @@
+#include "../include/log.h"
 #include "../include/code_generator.h"
 #include "../include/header_generator.h"
 #include <iostream>
@@ -224,6 +225,9 @@ public:
 };
 
 // CodeGenerator implementation
+// Marks a source blank line in the generated text (resolved in generateProgram).
+static const char kBlankMarker = '\x01';
+
 CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
     scopes.emplace_back(); // global scope
 }
@@ -392,6 +396,7 @@ void CodeGenerator::analyzeProgramForIncludes(Program* program, IncludeManager& 
 }
 
 void CodeGenerator::generateProgram(Program* program, IncludeManager& include_manager) {
+    includes = &include_manager;
     // FIRST: Analyze the program to detect required features
     analyzeProgramForIncludes(program, include_manager);
 
@@ -453,9 +458,62 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     }
 
     std::string body = output.str();
+
+    // Resolve blank-line markers
+    {
+        std::vector<std::string> lines;
+        std::istringstream in(body);
+        for (std::string line; std::getline(in, line);) lines.push_back(line);
+
+        auto trimmed = [](const std::string& text) {
+            size_t first = text.find_first_not_of(" \t");
+            return first == std::string::npos ? std::string() : text.substr(first);
+        };
+
+        std::string resolved;
+        std::string previous; // previous non-marker line, trimmed
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (!lines[i].empty() && lines[i][0] == kBlankMarker) {
+                std::string next;
+                for (size_t j = i + 1; j < lines.size(); ++j) {
+                    if (lines[j].empty() || lines[j][0] != kBlankMarker) { next = trimmed(lines[j]); break; }
+                }
+                bool after_open = !previous.empty() && previous.back() == '{';
+                bool before_close = !next.empty() && next[0] == '}';
+                if (!after_open && !before_close) resolved += "\n";
+                continue;
+            }
+            resolved += lines[i] + "\n";
+            previous = trimmed(lines[i]);
+        }
+        body = resolved;
+    }
     output.str("");
 
     if (needs_utility) include_manager.trackFeature("utility");
+
+    // Headers follow from what was actually emitted, so the include list and the
+    // code can never disagree (range() expands to std::vector, min() to std::min, ...).
+    static const std::vector<std::pair<std::string, std::string>> emitted_to_header = {
+        {"std::cout", "iostream"}, {"std::cin", "iostream"}, {"std::flush", "iostream"},
+        {"std::string", "string"}, {"std::to_string", "string"}, {"std::stoi", "string"},
+        {"std::stof", "string"}, {"std::getline", "string"},
+        {"std::vector", "vector"}, {"std::map", "map"}, {"std::set", "set"},
+        {"std::tuple", "tuple"}, {"std::make_tuple", "tuple"},
+        {"std::stringstream", "sstream"}, {"std::hex", "iomanip"}, {"std::oct", "iomanip"},
+        {"std::min", "algorithm"}, {"std::max", "algorithm"}, {"std::sort", "algorithm"},
+        {"std::reverse", "algorithm"}, {"std::min_element", "algorithm"}, {"std::max_element", "algorithm"},
+        {"std::accumulate", "numeric"},
+        {"std::sqrt", "cmath"}, {"std::pow", "cmath"}, {"std::abs", "cmath"}, {"std::round", "cmath"},
+        {"std::sin", "cmath"}, {"std::cos", "cmath"}, {"std::tan", "cmath"}, {"std::log", "cmath"},
+        {"std::log10", "cmath"}, {"std::exp", "cmath"}, {"std::ceil", "cmath"}, {"std::floor", "cmath"},
+        {"std::pair", "utility"}, {"std::make_pair", "utility"},
+        {"std::function", "functional"}, {"std::unique_ptr", "memory"}, {"std::make_unique", "memory"},
+        {"std::shared_ptr", "memory"}, {"std::make_shared", "memory"},
+    };
+    for (const auto& entry : emitted_to_header) {
+        if (body.find(entry.first) != std::string::npos) include_manager.trackFeature(entry.second);
+    }
 
     output << prefix;
 
@@ -485,7 +543,16 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     output << "\n" << body;
 }
 
+// Blank lines between statements in the source are kept in the output. A marker line
+// is emitted here and resolved in generateProgram, where markers that would land right
+// after an opening brace or before a closing one are dropped.
+
 void CodeGenerator::generateStatement(Stmt* stmt) {
+    if (stmt->line > 0 && last_statement_line > 0 && stmt->line > last_statement_line + 1) {
+        output << kBlankMarker << "\n";
+    }
+    // Advance first so that nested statements measure their gap from this one's header
+    if (stmt->line > last_statement_line) last_statement_line = stmt->line;
     stmt->accept(*this);
 }
 
@@ -588,6 +655,7 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
     FunctionDef* previous_function = current_function;
     current_function = func;
 
+    last_statement_line = func->line;
     const bool is_constructor = (func->name == "__init__" && current_class);
     const bool is_generic = !func->type_params.empty();
     // Methods live in the class body and templates in the header, so both keep their
@@ -704,7 +772,7 @@ void CodeGenerator::extractMemberVariablesFromConstructor(FunctionDef* construct
 
                     cls->attributes.push_back(std::move(new_attr));
                     existing_members.insert(member_name);
-                    std::cout << "Extracted member variable from constructor: " << member_name << std::endl;
+                    pycpp::debugLog() << "Extracted member variable from constructor: " << member_name << std::endl;
                 }
             }
         }
@@ -767,7 +835,7 @@ void CodeGenerator::extractMemberVariablesFromConstructor(FunctionDef* construct
 
                                     cls->attributes.push_back(std::move(new_attr));
                                     existing_members.insert(member_name);
-                                    std::cout << "Inferred member variable from assignment: " << member_name << std::endl;
+                                    pycpp::debugLog() << "Inferred member variable from assignment: " << member_name << std::endl;
                                 }
                             }
                         }
@@ -801,7 +869,7 @@ void CodeGenerator::generateClass(ClassDef* cls) {
     }
 
     // Generate member variable declarations from ALL attributes
-    std::cout << "Generating class " << cls->name << " with " << cls->attributes.size() << " attributes" << std::endl;
+    pycpp::debugLog() << "Generating class " << cls->name << " with " << cls->attributes.size() << " attributes" << std::endl;
 
     for (auto& attr : cls->attributes) {
         // Extract member name from "self.member_name" pattern
@@ -942,6 +1010,7 @@ void CodeGenerator::generateType(Type* type) {
     if (auto basic_type = dynamic_cast<BasicType*>(type)) {
         // Map PyCPP types to C++ types
         if (basic_type->name == "str" || basic_type->name == "std::string") {
+            require("string");
             output << "std::string";
         }
         else if (basic_type->name == "None" || basic_type->name == "NoneType") {
@@ -966,11 +1035,13 @@ void CodeGenerator::generateType(Type* type) {
         output << "*";
     }
     else if (auto list_type = dynamic_cast<ListType*>(type)) {
+        require("vector");
         output << "std::vector<";
         generateType(list_type->element_type.get());
         output << ">";
     }
     else if (auto dict_type = dynamic_cast<DictType*>(type)) {
+        require("map");
         output << "std::map<";
         generateType(dict_type->key_type.get());
         output << ", ";
@@ -1068,7 +1139,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
             function_name = ident->name;
 
             // Check if this might be a class constructor
-            std::cout << "Generating call expression, might be constructor: " << function_name << std::endl;
+            pycpp::debugLog() << "Generating call expression, might be constructor: " << function_name << std::endl;
         }
         else if (auto member_access = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
             if (auto obj_ident = dynamic_cast<Identifier*>(member_access->object.get())) {
@@ -1082,6 +1153,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
 
         // Handle built-in functions - COMPREHENSIVE with type conversions
         if (function_name == "print") {
+            require("iostream");
             output << "std::cout";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                 if (i > 0) output << " << ' '";
@@ -1092,6 +1164,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
             return;
         }
         else if (function_name == "input") {
+            require("iostream");
+            require("string");
             if (call_expr->arguments.size() > 0) {
                 // Print prompt first, then get input
                 output << "[]() { ";
@@ -2093,14 +2167,12 @@ void CodeGenerator::visit(ForStmt& node) {
     output << getIndent() << "}\n";
     popScope();
 }
+// `unsafe:` only changes what PyCPP's checks allow; it has no C++ counterpart, so its
+// statements are emitted in place.
 void CodeGenerator::visit(UnsafeBlock& node) {
-    output << getIndent() << "// unsafe {\n";
-    indent();
     for (auto& stmt : node.body) {
         generateStatement(stmt.get());
     }
-    dedent();
-    output << getIndent() << "// } unsafe\n";
 }
 
 void CodeGenerator::visit(ExprStmt& node) {

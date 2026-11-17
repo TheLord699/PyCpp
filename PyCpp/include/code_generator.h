@@ -42,6 +42,10 @@ private:
     void dedent();
     std::string getIndent();
 
+    int last_statement_line = 0; // source line of the previous statement, to keep blank lines
+    IncludeManager* includes = nullptr; // set while generating; records headers the emitted code needs
+    void require(const std::string& feature) { if (includes) includes->trackFeature(feature); }
+
     void generateProgram(Program* program, IncludeManager& include_manager);
     void generateStatement(Stmt* stmt);
     void generateFunction(FunctionDef* func);

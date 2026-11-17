@@ -43,6 +43,7 @@ private:
     std::vector<std::unordered_map<std::string, Symbol>> scopes;
     std::unordered_map<std::string, FunctionSymbol> functions;
     std::unordered_map<std::string, ClassSymbol> classes;
+    std::unordered_set<std::string> generic_params; // type parameters such as T from def f[T] / class C[T]
 
     // Current context
     int current_scope;

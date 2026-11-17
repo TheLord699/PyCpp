@@ -42,8 +42,28 @@ std::vector<std::unique_ptr<Type>> PyCppParser::parseTypeArgs() {
     return args;
 }
 
+// After '.' or '::' any word is a member/C++ name, even one PyCPP lexes as a keyword
+// (mem.free, list.append, std::sqrt, ...).
+static bool isWordToken(const Token& token) {
+    return !token.value.empty() &&
+        (std::isalpha(static_cast<unsigned char>(token.value[0])) || token.value[0] == '_');
+}
+
+void PyCppParser::reportError(const std::string& message, int line, int column) {
+    errors.push_back("line " + std::to_string(line) + ":" + std::to_string(column) + ": syntax error: " + message);
+}
+
 std::unique_ptr<Program> PyCppParser::parse() {
-    return parseProgram();
+    auto program = parseProgram();
+    if (!errors.empty()) {
+        std::string all;
+        for (size_t i = 0; i < errors.size(); ++i) {
+            if (i > 0) all += "\n   ";
+            all += errors[i];
+        }
+        throw std::runtime_error(all);
+    }
+    return program;
 }
 
 // ===== Helper Methods =====
@@ -245,14 +265,14 @@ Token PyCppParser::advance() {
     }
 
     Token token = tokens[position];
-    std::cout << "Advancing from " << position << " '" << token.value << "' to ";
+    pycpp::debugLog() << "Advancing from " << position << " '" << token.value << "' to ";
     position++;
 
     if (!atEnd()) {
-        std::cout << position << " '" << peek().value << "'" << std::endl;
+        pycpp::debugLog() << position << " '" << peek().value << "'" << std::endl;
     }
     else {
-        std::cout << position << " (END)" << std::endl;
+        pycpp::debugLog() << position << " (END)" << std::endl;
     }
 
     return token;
@@ -295,14 +315,14 @@ bool PyCppParser::atEnd() {
 void PyCppParser::synchronize() {
     if (atEnd()) return;
 
-    std::cout << "Synchronizing from error at position " << position
+    pycpp::debugLog() << "Synchronizing from error at position " << position
         << ", token: '" << peek().value << "'" << std::endl;
 
     advance(); // Skip the problematic token
 
     while (!atEnd()) {
         if (tokens[position - 1].type == TokenType::NEWLINE) {
-            std::cout << "Synchronized at newline" << std::endl;
+            pycpp::debugLog() << "Synchronized at newline" << std::endl;
             return;
         }
 
@@ -316,7 +336,7 @@ void PyCppParser::synchronize() {
         case TokenType::IMPORT:
         case TokenType::STRUCT:
         case TokenType::TEMPLATE:
-            std::cout << "Synchronized at statement start: " << peek().value << std::endl;
+            pycpp::debugLog() << "Synchronized at statement start: " << peek().value << std::endl;
             return;
         default:
             break;
@@ -324,7 +344,7 @@ void PyCppParser::synchronize() {
         advance();
     }
 
-    std::cout << "Synchronized at end of file" << std::endl;
+    pycpp::debugLog() << "Synchronized at end of file" << std::endl;
 }
 
 // ===== Indentation Handling =====
@@ -342,18 +362,18 @@ std::unique_ptr<Program> PyCppParser::parseProgram() {
     program->line = 1;
     program->column = 1;
 
-    std::cout << "Starting to parse program with " << tokens.size() << " tokens..." << std::endl;
+    pycpp::debugLog() << "Starting to parse program with " << tokens.size() << " tokens..." << std::endl;
 
     size_t last_position = position;
     size_t no_progress_count = 0;
     size_t statement_count = 0;
 
-    while (!atEnd() && statement_count < 100) { // Safety limit
+    while (!atEnd()) {
         // Prevent infinite loops
         if (position == last_position) {
             no_progress_count++;
             if (no_progress_count > 5) {
-                std::cerr << "Parser stuck at position " << position << ", breaking" << std::endl;
+                reportError("could not parse near '" + peek().value + "'", peek().line, peek().column);
                 break;
             }
         }
@@ -364,33 +384,33 @@ std::unique_ptr<Program> PyCppParser::parseProgram() {
 
         try {
             handleIndentation();
-            std::cout << "=== Parsing top-level statement " << statement_count << " at position " << position << " ===" << std::endl;
+            pycpp::debugLog() << "=== Parsing top-level statement " << statement_count << " at position " << position << " ===" << std::endl;
 
             if (auto stmt = parseTopLevelStatement()) {
                 program->statements.push_back(std::move(stmt));
-                std::cout << "Successfully parsed statement " << statement_count << std::endl;
+                pycpp::debugLog() << "Successfully parsed statement " << statement_count << std::endl;
                 statement_count++;
             }
             else {
-                std::cout << "No statement parsed, reached position: " << position << std::endl;
+                pycpp::debugLog() << "No statement parsed, reached position: " << position << std::endl;
                 break;
             }
         }
         catch (const std::runtime_error& e) {
-            std::cerr << "Parse error at position " << position << ": " << e.what() << std::endl;
+            reportError(e.what(), peek().line, peek().column);
             synchronize();
             // Don't break, try to continue parsing
         }
     }
 
-    std::cout << "Finished parsing program with " << program->statements.size() << " statements" << std::endl;
+    pycpp::debugLog() << "Finished parsing program with " << program->statements.size() << " statements" << std::endl;
     return program;
 }
 
 std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
     if (atEnd()) return nullptr;
 
-    std::cout << "parseTopLevelStatement at position " << position << ", token: '" << peek().value << "'" << std::endl;
+    pycpp::debugLog() << "parseTopLevelStatement at position " << position << ", token: '" << peek().value << "'" << std::endl;
 
     // Handle struct definitions FIRST (before other statements)
     if (check(TokenType::STRUCT)) {
@@ -444,7 +464,7 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
 
     auto stmt = parseStatement();
     if (stmt) {
-        std::cout << "Parsed regular statement at top level" << std::endl;
+        pycpp::debugLog() << "Parsed regular statement at top level" << std::endl;
     }
     return stmt;
 }
@@ -544,7 +564,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
             std::to_string(peek().line) + ":" + std::to_string(peek().column));
     }
     func->type_params = parseTypeParams(); // def f[T](...)
-    std::cout << "Parsing function: " << func->name << std::endl;
+    pycpp::debugLog() << "Parsing function: " << func->name << std::endl;
 
     consume(TokenType::LPAREN, "Expected '(' after function name");
 
@@ -552,7 +572,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     if (!check(TokenType::RPAREN)) {
         do {
             std::string param_name = consume(TokenType::IDENTIFIER, "Expected parameter name").value;
-            std::cout << "Found parameter: " << param_name << std::endl;
+            pycpp::debugLog() << "Found parameter: " << param_name << std::endl;
 
             // Handle parameters with type annotations
             std::unique_ptr<Type> param_type = nullptr;
@@ -560,7 +580,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
 
             if (match(TokenType::COLON)) {
                 param_type = parseType();
-                std::cout << "Parameter " << param_name << " has type: " << (param_type ? param_type->name : "null") << std::endl;
+                pycpp::debugLog() << "Parameter " << param_name << " has type: " << (param_type ? param_type->name : "null") << std::endl;
             }
             else {
                 // For 'self' parameter in methods, create a basic type
@@ -568,14 +588,14 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
                     auto self_type = std::make_unique<BasicType>();
                     self_type->name = "auto"; // self is automatically typed
                     param_type = std::move(self_type);
-                    std::cout << "Auto-typed self parameter" << std::endl;
+                    pycpp::debugLog() << "Auto-typed self parameter" << std::endl;
                 }
             }
 
             // Optional default value
             if (match(TokenType::EQUAL)) {
                 default_value = parseExpression();
-                std::cout << "Parameter " << param_name << " has default value" << std::endl;
+                pycpp::debugLog() << "Parameter " << param_name << " has default value" << std::endl;
             }
 
             func->parameters.emplace_back(param_name, std::move(param_type), std::move(default_value));
@@ -592,18 +612,18 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
             void_type->name = "void";
             func->return_type = std::move(void_type);
             advance(); // consume 'None'
-            std::cout << "Function has return type: void (from None)" << std::endl;
+            pycpp::debugLog() << "Function has return type: void (from None)" << std::endl;
         }
         else {
             func->return_type = parseType();
-            std::cout << "Function has return type: " << func->return_type->name << std::endl;
+            pycpp::debugLog() << "Function has return type: " << func->return_type->name << std::endl;
         }
     }
     else {
         auto void_type = std::make_unique<BasicType>();
         void_type->name = "void";
         func->return_type = std::move(void_type);
-        std::cout << "Function has implicit void return type" << std::endl;
+        pycpp::debugLog() << "Function has implicit void return type" << std::endl;
     }
 
     consume(TokenType::COLON, "Expected ':' before function body");
@@ -612,20 +632,20 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     if (check(TokenType::NEWLINE)) {
         // Multi-line function
         consume(TokenType::NEWLINE, "Expected newline after function header");
-        std::cout << "Parsing multi-line function body for " << func->name << std::endl;
+        pycpp::debugLog() << "Parsing multi-line function body for " << func->name << std::endl;
         func->body = parseBlock();
-        std::cout << "Function " << func->name << " body has " << func->body.size() << " statements" << std::endl;
+        pycpp::debugLog() << "Function " << func->name << " body has " << func->body.size() << " statements" << std::endl;
     }
     else {
         // Single-line function (inline)
-        std::cout << "Parsing single-line function body for " << func->name << std::endl;
+        pycpp::debugLog() << "Parsing single-line function body for " << func->name << std::endl;
         if (auto stmt = parseStatement()) {
             func->body.push_back(std::move(stmt));
-            std::cout << "Single-line function has 1 statement" << std::endl;
+            pycpp::debugLog() << "Single-line function has 1 statement" << std::endl;
         }
     }
 
-    std::cout << "Finished parsing function: " << func->name << std::endl;
+    pycpp::debugLog() << "Finished parsing function: " << func->name << std::endl;
     return func;
 }
 
@@ -634,32 +654,32 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
     class_def->line = tokens[position - 1].line;
     class_def->column = tokens[position - 1].column;
 
-    std::cout << "=== STARTING CLASS PARSING ===" << std::endl;
-    std::cout << "Current position: " << position << ", token: '" << peek().value << "'" << std::endl;
+    pycpp::debugLog() << "=== STARTING CLASS PARSING ===" << std::endl;
+    pycpp::debugLog() << "Current position: " << position << ", token: '" << peek().value << "'" << std::endl;
 
     // Class name
     class_def->name = consume(TokenType::IDENTIFIER, "Expected class name").value;
     class_def->type_params = parseTypeParams(); // class C[T]:
-    std::cout << "Class name: " << class_def->name << std::endl;
+    pycpp::debugLog() << "Class name: " << class_def->name << std::endl;
 
     // Inheritance (optional)
     if (match(TokenType::LPAREN)) {
-        std::cout << "Found inheritance at position: " << position << std::endl;
+        pycpp::debugLog() << "Found inheritance at position: " << position << std::endl;
         if (check(TokenType::IDENTIFIER)) {
             class_def->base_class = advance().value;
-            std::cout << "Base class: " << class_def->base_class << std::endl;
+            pycpp::debugLog() << "Base class: " << class_def->base_class << std::endl;
         }
         consume(TokenType::RPAREN, "Expected ')' after base class");
     }
 
     // Class body
-    std::cout << "Before colon, position: " << position << ", token: '" << peek().value << "'" << std::endl;
+    pycpp::debugLog() << "Before colon, position: " << position << ", token: '" << peek().value << "'" << std::endl;
     consume(TokenType::COLON, "Expected ':' before class body");
-    std::cout << "After colon, position: " << position << ", token: '" << peek().value << "'" << std::endl;
+    pycpp::debugLog() << "After colon, position: " << position << ", token: '" << peek().value << "'" << std::endl;
 
     if (check(TokenType::NEWLINE)) {
         consume(TokenType::NEWLINE, "Expected newline after class definition");
-        std::cout << "After newline, position: " << position << ", token: '" << peek().value << "'" << std::endl;
+        pycpp::debugLog() << "After newline, position: " << position << ", token: '" << peek().value << "'" << std::endl;
 
         // The class body is an INDENT ... DEDENT block
         handleIndentation();
@@ -672,27 +692,27 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
         int member_count = 0;
 
         while (!atEnd()) {
-            std::cout << "=== Parsing class member " << member_count << " ===" << std::endl;
-            std::cout << "Position: " << position << ", token: '" << peek().value << "' type: " << static_cast<int>(peek().type) << std::endl;
+            const size_t member_start = position;
+            pycpp::debugLog() << "=== Parsing class member " << member_count << " ===" << std::endl;
+            pycpp::debugLog() << "Position: " << position << ", token: '" << peek().value << "' type: " << static_cast<int>(peek().type) << std::endl;
 
             handleIndentation();
 
             // The matching DEDENT ends the class body
             if (check(TokenType::DEDENT)) {
                 advance();
-                std::cout << "=== ENDING CLASS PARSING - dedent ===" << std::endl;
+                pycpp::debugLog() << "=== ENDING CLASS PARSING - dedent ===" << std::endl;
                 break;
             }
 
             // Check for end of file
             if (atEnd()) {
-                std::cout << "End of class detected (EOF) at position: " << position << std::endl;
+                pycpp::debugLog() << "End of class detected (EOF) at position: " << position << std::endl;
                 break;
             }
 
             if (check(TokenType::INDENT)) {
-                std::cerr << "Error in class body at line " << peek().line
-                    << ": unexpected indentation" << std::endl;
+                reportError("unexpected indentation", peek().line, peek().column);
                 skipIndentedRegion();
                 continue;
             }
@@ -700,7 +720,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
             try {
                 // Parse class members (methods and attributes)
                 if (check(TokenType::DEF)) {
-                    std::cout << "Found method definition at position: " << position << std::endl;
+                    pycpp::debugLog() << "Found method definition at position: " << position << std::endl;
                     size_t method_start = position;
                     advance(); // consume 'def'
 
@@ -708,63 +728,64 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
                         auto method = parseFunctionDef();
                         if (method) {
                             class_def->methods.push_back(std::move(method));
-                            std::cout << "Successfully parsed method: " << class_def->methods.back()->name << std::endl;
+                            pycpp::debugLog() << "Successfully parsed method: " << class_def->methods.back()->name << std::endl;
                         }
                         else {
-                            std::cout << "Failed to parse method" << std::endl;
+                            pycpp::debugLog() << "Failed to parse method" << std::endl;
                             position = method_start;
                             synchronizeInBlock();
                         }
                     }
                     catch (const std::runtime_error& e) {
-                        std::cerr << "Error parsing method at position " << position << ": " << e.what() << std::endl;
+                        reportError(e.what(), peek().line, peek().column);
                         position = method_start;
                         synchronizeInBlock();
                     }
                 }
                 else if (isClassAttributeDeclaration()) {
-                    std::cout << "Found class attribute definition at position: " << position << std::endl;
+                    pycpp::debugLog() << "Found class attribute definition at position: " << position << std::endl;
                     auto attr = parseClassAttribute();
                     if (attr) {
                         class_def->attributes.push_back(std::move(attr));
-                        std::cout << "Successfully parsed class attribute: " << class_def->attributes.back()->var_name << std::endl;
+                        pycpp::debugLog() << "Successfully parsed class attribute: " << class_def->attributes.back()->var_name << std::endl;
                     }
                     else {
-                        std::cout << "Failed to parse class attribute" << std::endl;
+                        pycpp::debugLog() << "Failed to parse class attribute" << std::endl;
                         synchronizeInBlock();
                     }
                 }
                 else {
                     // Try to parse as a statement (might be method body content)
-                    std::cout << "Attempting to parse as statement in class context at position " << position << std::endl;
+                    pycpp::debugLog() << "Attempting to parse as statement in class context at position " << position << std::endl;
                     if (auto stmt = parseStatement()) {
-                        std::cout << "Parsed statement in class context: " << typeid(*stmt).name() << std::endl;
+                        pycpp::debugLog() << "Parsed statement in class context: " << typeid(*stmt).name() << std::endl;
                         // Note: This might indicate a parsing issue if we're getting non-member statements
                     }
                     else {
-                        std::cout << "Unexpected token in class at position " << position
+                        pycpp::debugLog() << "Unexpected token in class at position " << position
                             << ": '" << peek().value << "' type: " << static_cast<int>(peek().type) << std::endl;
                         synchronizeInBlock();
                     }
                 }
             }
             catch (const std::runtime_error& e) {
-                std::cerr << "Error parsing class member at position " << position << ": " << e.what() << std::endl;
+                reportError(e.what(), peek().line, peek().column);
                 synchronizeInBlock();
             }
 
             member_count++;
-            if (member_count > 100) {
-                std::cout << "Safety limit reached in class parsing" << std::endl;
-                break;
+            if (position == member_start) {
+                // No progress: report it and skip the token so the loop always ends
+                reportError("unexpected '" + peek().value + "' in class body", peek().line, peek().column);
+                advance();
             }
         }
     }
     else {
-        std::cout << "No newline after class, single-line class?" << std::endl;
+        pycpp::debugLog() << "No newline after class, single-line class?" << std::endl;
         // Handle single-line class (uncommon but possible)
         if (check(TokenType::DEF)) {
-            std::cout << "Found method in single-line class" << std::endl;
+            pycpp::debugLog() << "Found method in single-line class" << std::endl;
             advance(); // consume 'def'
             auto method = parseFunctionDef();
             if (method) {
@@ -772,7 +793,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
             }
         }
         else if (isClassAttributeDeclaration()) {
-            std::cout << "Found attribute in single-line class" << std::endl;
+            pycpp::debugLog() << "Found attribute in single-line class" << std::endl;
             auto attr = parseClassAttribute();
             if (attr) {
                 class_def->attributes.push_back(std::move(attr));
@@ -780,7 +801,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
         }
     }
 
-    std::cout << "=== FINISHED CLASS PARSING: " << class_def->name << " with "
+    pycpp::debugLog() << "=== FINISHED CLASS PARSING: " << class_def->name << " with "
         << class_def->methods.size() << " methods and "
         << class_def->attributes.size() << " attributes ===" << std::endl;
     return class_def;
@@ -839,13 +860,13 @@ std::unique_ptr<VarDecl> PyCppParser::parseClassAttribute() {
     var_decl->line = peek().line;
     var_decl->column = peek().column;
 
-    std::cout << "Starting to parse class attribute at position " << position << std::endl;
+    pycpp::debugLog() << "Starting to parse class attribute at position " << position << std::endl;
 
     // Variable name - could be a simple identifier or member access
     std::string member_name;
 
     if (isMemberAccess()) {
-        std::cout << "Detected member access pattern for class attribute" << std::endl;
+        pycpp::debugLog() << "Detected member access pattern for class attribute" << std::endl;
         // Handle member access like self.name or self.obj.attr
         while (check(TokenType::IDENTIFIER)) {
             if (!member_name.empty()) member_name += ".";
@@ -853,12 +874,12 @@ std::unique_ptr<VarDecl> PyCppParser::parseClassAttribute() {
             if (!match(TokenType::DOT)) break;
         }
         var_decl->var_name = member_name;
-        std::cout << "Parsing class attribute: " << var_decl->var_name << std::endl;
+        pycpp::debugLog() << "Parsing class attribute: " << var_decl->var_name << std::endl;
     }
     else {
         // Simple identifier (without self. prefix)
         var_decl->var_name = consume(TokenType::IDENTIFIER, "Expected attribute name").value;
-        std::cout << "Parsing simple class attribute: " << var_decl->var_name << std::endl;
+        pycpp::debugLog() << "Parsing simple class attribute: " << var_decl->var_name << std::endl;
     }
 
     // We should be at the colon now
@@ -866,22 +887,22 @@ std::unique_ptr<VarDecl> PyCppParser::parseClassAttribute() {
         throw std::runtime_error("Expected ':' after attribute name '" + var_decl->var_name + "'");
     }
     advance(); // consume ':'
-    std::cout << "Consumed colon for attribute: " << var_decl->var_name << std::endl;
+    pycpp::debugLog() << "Consumed colon for attribute: " << var_decl->var_name << std::endl;
 
     // Type
     var_decl->type = parseType();
-    std::cout << "Attribute " << var_decl->var_name << " has type: " << var_decl->type->name << std::endl;
+    pycpp::debugLog() << "Attribute " << var_decl->var_name << " has type: " << var_decl->type->name << std::endl;
 
     // Optional initializer
     if (match(TokenType::EQUAL)) {
-        std::cout << "Attribute " << var_decl->var_name << " has initializer" << std::endl;
+        pycpp::debugLog() << "Attribute " << var_decl->var_name << " has initializer" << std::endl;
         var_decl->value = parseExpression();
     }
 
     // Consume newline if present
     match(TokenType::NEWLINE);
 
-    std::cout << "Successfully parsed class attribute: " << var_decl->var_name << std::endl;
+    pycpp::debugLog() << "Successfully parsed class attribute: " << var_decl->var_name << std::endl;
     return var_decl;
 }
 
@@ -938,7 +959,7 @@ std::unique_ptr<TemplateDef> PyCppParser::parseTemplateDef() {
     template_def->line = tokens[position - 1].line;
     template_def->column = tokens[position - 1].column;
 
-    std::cout << "Parsing template definition" << std::endl;
+    pycpp::debugLog() << "Parsing template definition" << std::endl;
 
     // Template parameters
     consume(TokenType::LESS, "Expected '<' after 'template'");
@@ -946,11 +967,11 @@ std::unique_ptr<TemplateDef> PyCppParser::parseTemplateDef() {
     // Handle 'typename' keyword
     if (check(TokenType::TYPENAME)) {
         advance(); // consume "typename"
-        std::cout << "Found typename keyword" << std::endl;
+        pycpp::debugLog() << "Found typename keyword" << std::endl;
     }
 
     template_def->type_param = consume(TokenType::IDENTIFIER, "Expected type parameter name").value;
-    std::cout << "Template parameter: " << template_def->type_param << std::endl;
+    pycpp::debugLog() << "Template parameter: " << template_def->type_param << std::endl;
 
     consume(TokenType::GREATER, "Expected '>' after template parameters");
 
@@ -960,19 +981,19 @@ std::unique_ptr<TemplateDef> PyCppParser::parseTemplateDef() {
     // Parse the templated definition (class or function)
     if (check(TokenType::CLASS)) {
         advance(); // consume "class"
-        std::cout << "Parsing templated class" << std::endl;
+        pycpp::debugLog() << "Parsing templated class" << std::endl;
         template_def->templated_class = parseClassDef();
     }
     else if (check(TokenType::DEF)) {
         advance(); // consume "def"  
-        std::cout << "Parsing templated function" << std::endl;
+        pycpp::debugLog() << "Parsing templated function" << std::endl;
         template_def->templated_function = parseFunctionDef();
     }
     else {
         throw std::runtime_error("Expected 'class' or 'def' after template declaration, got: " + peek().value);
     }
 
-    std::cout << "Finished parsing template" << std::endl;
+    pycpp::debugLog() << "Finished parsing template" << std::endl;
     return template_def;
 }
 
@@ -1029,13 +1050,13 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
     var_decl->line = peek().line;
     var_decl->column = peek().column;
 
-    std::cout << "Starting to parse variable declaration at position " << position << std::endl;
+    pycpp::debugLog() << "Starting to parse variable declaration at position " << position << std::endl;
 
     // Variable name - could be a simple identifier or member access
     std::string member_name;
 
     if (isMemberAccess()) {
-        std::cout << "Detected member access pattern for variable declaration" << std::endl;
+        pycpp::debugLog() << "Detected member access pattern for variable declaration" << std::endl;
         // Handle member access like self.name or self.obj.attr
         while (check(TokenType::IDENTIFIER)) {
             if (!member_name.empty()) member_name += ".";
@@ -1043,12 +1064,12 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
             if (!match(TokenType::DOT)) break;
         }
         var_decl->var_name = member_name;
-        std::cout << "Parsing member variable: " << var_decl->var_name << std::endl;
+        pycpp::debugLog() << "Parsing member variable: " << var_decl->var_name << std::endl;
     }
     else {
         // Simple identifier
         var_decl->var_name = consume(TokenType::IDENTIFIER, "Expected variable name").value;
-        std::cout << "Parsing simple variable: " << var_decl->var_name << std::endl;
+        pycpp::debugLog() << "Parsing simple variable: " << var_decl->var_name << std::endl;
     }
 
     // We should be at the colon now
@@ -1056,22 +1077,22 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
         throw std::runtime_error("Expected ':' after variable name '" + var_decl->var_name + "'");
     }
     advance(); // consume ':'
-    std::cout << "Consumed colon for variable: " << var_decl->var_name << std::endl;
+    pycpp::debugLog() << "Consumed colon for variable: " << var_decl->var_name << std::endl;
 
     // Type
     var_decl->type = parseType();
-    std::cout << "Variable " << var_decl->var_name << " has type: " << var_decl->type->name << std::endl;
+    pycpp::debugLog() << "Variable " << var_decl->var_name << " has type: " << var_decl->type->name << std::endl;
 
     // Optional initializer
     if (match(TokenType::EQUAL)) {
-        std::cout << "Variable " << var_decl->var_name << " has initializer" << std::endl;
+        pycpp::debugLog() << "Variable " << var_decl->var_name << " has initializer" << std::endl;
         var_decl->value = parseExpression();
     }
 
     // Consume newline if present
     match(TokenType::NEWLINE);
 
-    std::cout << "Successfully parsed variable declaration: " << var_decl->var_name << std::endl;
+    pycpp::debugLog() << "Successfully parsed variable declaration: " << var_decl->var_name << std::endl;
     return var_decl;
 }
 
@@ -1330,7 +1351,7 @@ std::unique_ptr<ForStmt> PyCppParser::parseForStmt() {
             auto last_stmt = for_stmt->body.back().get();
             if (dynamic_cast<ReturnStmt*>(last_stmt)) {
                 // If return is the last statement in loop, it's probably incorrect
-                std::cout << "WARNING: Return statement found as last statement in for loop body" << std::endl;
+                pycpp::debugLog() << "WARNING: Return statement found as last statement in for loop body" << std::endl;
             }
         }
     }
@@ -1454,7 +1475,7 @@ std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
             use_stmt->library = library; // Fallback
         }
 
-        std::cout << "Parsed use statement for library: " << use_stmt->library << std::endl;
+        pycpp::debugLog() << "Parsed use statement for library: " << use_stmt->library << std::endl;
     }
     else {
         // Fallback: try to parse < library > format
@@ -1482,7 +1503,7 @@ std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
 // indentation level they were written at.
 std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
     std::vector<std::unique_ptr<Stmt>> statements;
-    std::cout << "Starting to parse block at position " << position << std::endl;
+    pycpp::debugLog() << "Starting to parse block at position " << position << std::endl;
 
     handleIndentation();
 
@@ -1497,7 +1518,7 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
 
         if (check(TokenType::DEDENT)) {
             advance(); // consume the DEDENT that closes this block
-            std::cout << "End of block (dedent)" << std::endl;
+            pycpp::debugLog() << "End of block (dedent)" << std::endl;
             break;
         }
 
@@ -1507,8 +1528,7 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
 
         if (check(TokenType::INDENT)) {
             // A line indented deeper than the block it belongs to
-            std::cerr << "Error in block at line " << peek().line
-                << ": unexpected indentation" << std::endl;
+            reportError("unexpected indentation", peek().line, peek().column);
             skipIndentedRegion();
             continue;
         }
@@ -1517,15 +1537,15 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
         try {
             if (auto stmt = parseStatement()) {
                 statements.push_back(std::move(stmt));
-                std::cout << "Added statement to block, now has " << statements.size() << " statements" << std::endl;
+                pycpp::debugLog() << "Added statement to block, now has " << statements.size() << " statements" << std::endl;
             }
             else {
-                std::cout << "No statement parsed at position " << position << ", breaking from block" << std::endl;
+                pycpp::debugLog() << "No statement parsed at position " << position << ", breaking from block" << std::endl;
                 break;
             }
         }
         catch (const std::runtime_error& e) {
-            std::cerr << "Error in block at position " << position << ": " << e.what() << std::endl;
+            reportError(e.what(), peek().line, peek().column);
             synchronizeInBlock();
         }
 
@@ -1535,7 +1555,7 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
         }
     }
 
-    std::cout << "Finished parsing block with " << statements.size() << " statements" << std::endl;
+    pycpp::debugLog() << "Finished parsing block with " << statements.size() << " statements" << std::endl;
     return statements;
 }
 
@@ -1856,7 +1876,7 @@ std::unique_ptr<Expr> PyCppParser::parseCall(std::unique_ptr<Expr> callee) {
     call->line = tokens[position - 1].line;
     call->column = tokens[position - 1].column;
 
-    std::cout << "Parsing function call at position " << position << std::endl;
+    pycpp::debugLog() << "Parsing function call at position " << position << std::endl;
 
     // Arguments
     consume(TokenType::LPAREN, "Expected '(' after function name");
@@ -1949,7 +1969,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
         throw std::runtime_error("Unexpected end of file while parsing expression");
     }
 
-    std::cout << "parsePrimary at position " << position << ", token: '" << peek().value << "'" << std::endl;
+    pycpp::debugLog() << "parsePrimary at position " << position << ", token: '" << peek().value << "'" << std::endl;
 
     // Add recursion depth check
     static thread_local int recursion_depth = 0;
@@ -2032,9 +2052,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                    tokens[position + 1].type == TokenType::COLON &&
                    tokens[position + 1].line == tokens[position].line &&
                    tokens[position + 1].column == tokens[position].column + 1 &&
-                   !tokens[position + 2].value.empty() &&
-                   (std::isalpha(static_cast<unsigned char>(tokens[position + 2].value[0])) ||
-                    tokens[position + 2].value[0] == '_')) {
+                   isWordToken(tokens[position + 2])) {
                 // After '::' any word is a C++ name, even one that PyCPP lexes as a
                 // keyword (std::sqrt, std::min, std::string, ...).
                 ident.name += "::" + tokens[position + 2].value;
@@ -2043,7 +2061,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
 
             // Handle member access (obj.attr) - UPDATED to use MemberAccess
             while (match(TokenType::DOT)) {
-                if (check(TokenType::IDENTIFIER)) {
+                if (!atEnd() && isWordToken(peek())) {
                     std::string member_name = advance().value;
                     int member_line = tokens[position - 1].line;
                     int member_column = tokens[position - 1].column;
@@ -2089,7 +2107,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
 
                 // No special handling needed - in C++, ClassName() is valid for constructors
                 // The generated C++ code will handle this correctly
-                std::cout << "Parsed call expression, might be constructor: " << callee_name << std::endl;
+                pycpp::debugLog() << "Parsed call expression, might be constructor: " << callee_name << std::endl;
             }
             else if (check(TokenType::LBRACKET)) {
                 // Handle array subscript
@@ -2139,10 +2157,10 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
     recursion_depth--;
 
     if (result) {
-        std::cout << "parsePrimary successfully parsed expression at position " << position << std::endl;
+        pycpp::debugLog() << "parsePrimary successfully parsed expression at position " << position << std::endl;
     }
     else {
-        std::cout << "parsePrimary returned nullptr at position " << position << std::endl;
+        pycpp::debugLog() << "parsePrimary returned nullptr at position " << position << std::endl;
     }
 
     return result;
@@ -2152,7 +2170,7 @@ std::unique_ptr<Expr> PyCppParser::parseListLiteral() {
     list->line = tokens[position - 1].line;
     list->column = tokens[position - 1].column;
 
-    std::cout << "Parsing list literal at position " << position << std::endl;
+    pycpp::debugLog() << "Parsing list literal at position " << position << std::endl;
 
     if (!check(TokenType::RBRACKET)) {
         do {
@@ -2169,7 +2187,7 @@ std::unique_ptr<Expr> PyCppParser::parseDictLiteral() {
     dict->line = tokens[position - 1].line;
     dict->column = tokens[position - 1].column;
 
-    std::cout << "Parsing dict literal at position " << position << std::endl;
+    pycpp::debugLog() << "Parsing dict literal at position " << position << std::endl;
 
     if (!check(TokenType::RBRACE)) {
         do {

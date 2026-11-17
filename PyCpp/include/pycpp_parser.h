@@ -1,6 +1,7 @@
 #ifndef PYCPP_PARSER_H
 #define PYCPP_PARSER_H
 
+#include "log.h"
 #include "../include/ast.h"
 #include "../include/lexer.h"
 #include <vector>
@@ -12,6 +13,8 @@
 class PyCppParser {
 private:
     std::vector<Token> tokens;
+    std::vector<std::string> errors; // collected syntax errors; parse() throws if any
+    void reportError(const std::string& message, int line, int column);
     size_t position;
     int current_indent;
     std::set<std::string> generic_names; // functions/classes declared with [T] parameters

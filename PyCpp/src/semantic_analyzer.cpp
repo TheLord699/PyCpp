@@ -1,3 +1,4 @@
+#include "../include/log.h"
 #include "../include/semantic_analyzer.h"
 #include <iostream>
 #include <stdexcept>
@@ -58,19 +59,18 @@ SemanticAnalyzer::SemanticAnalyzer()
 }
 
 void SemanticAnalyzer::analyze(std::unique_ptr<Program>& program) {
-    std::cout << "=== Starting Semantic Analysis ===" << std::endl;
+    pycpp::debugLog() << "=== Starting Semantic Analysis ===" << std::endl;
 
     try {
         analyzeProgram(program.get());
-        std::cout << "=== Semantic Analysis Completed Successfully ===" << std::endl;
-        std::cout << "Detected built-in usage: ";
+        pycpp::debugLog() << "=== Semantic Analysis Completed Successfully ===" << std::endl;
+        pycpp::debugLog() << "Detected built-in usage: ";
         for (const auto& builtin : used_builtins) {
-            std::cout << builtin << " ";
+            pycpp::debugLog() << builtin << " ";
         }
-        std::cout << std::endl;
+        pycpp::debugLog() << std::endl;
     }
     catch (const std::runtime_error& e) {
-        std::cerr << "Semantic analysis failed: " << e.what() << std::endl;
         throw;
     }
 }
@@ -101,7 +101,7 @@ void SemanticAnalyzer::addSymbol(const std::string& name, const std::string& typ
     symbol.scope_level = current_scope;
 
     scopes.back()[name] = symbol;
-    std::cout << "Added symbol: " << name << " : " << type << " at scope " << current_scope << std::endl;
+    pycpp::debugLog() << "Added symbol: " << name << " : " << type << " at scope " << current_scope << std::endl;
 }
 
 SemanticAnalyzer::Symbol* SemanticAnalyzer::findSymbol(const std::string& name) {
@@ -131,10 +131,19 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
         return true;
     }
 
-    // Check pointer types
-    if (type.find("*") == 0) { // Type starts with *
-        std::string base_type = type.substr(1);
-        return isValidType(base_type);
+    // Check pointer types ("T*" as produced by typeToString)
+    if (!type.empty() && type.back() == '*') {
+        return isValidType(type.substr(0, type.size() - 1));
+    }
+
+    // Generic type parameters (T in def f[T] / class C[T])
+    if (generic_params.count(type) > 0) {
+        return true;
+    }
+
+    // Types brought in with `from module import Name`
+    if (Symbol* imported = findSymbol(type)) {
+        if (imported->type == "imported_symbol") return true;
     }
 
     // Check user-defined types (classes, structs)
@@ -290,21 +299,21 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             else if (ident->name == "mem.alloc" || ident->name == "mem.free") {
                 trackBuiltinUsage("cstdlib");
             }
-            std::cout << "Found built-in function: " << ident->name << std::endl;
+            pycpp::debugLog() << "Found built-in function: " << ident->name << std::endl;
             return;
         }
 
         // === FIX: Check if this might be a class name (constructor) ===
         if (classes.find(ident->name) != classes.end()) {
             // This is a class name used as constructor - valid
-            std::cout << "Found class constructor call: " << ident->name << std::endl;
+            pycpp::debugLog() << "Found class constructor call: " << ident->name << std::endl;
             return;
         }
 
         // === FIX: Check if this might be a function name ===
         if (functions.find(ident->name) != functions.end()) {
             // This is a function name - valid
-            std::cout << "Found function call: " << ident->name << std::endl;
+            pycpp::debugLog() << "Found function call: " << ident->name << std::endl;
             return;
         }
 
@@ -315,19 +324,24 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 // Check if it's a class member
                 ClassSymbol& class_sym = classes[current_class->name];
                 if (class_sym.attributes.find(ident->name) != class_sym.attributes.end()) {
-                    std::cout << "Found class member (implicit self): " << ident->name
+                    pycpp::debugLog() << "Found class member (implicit self): " << ident->name
                         << " : " << class_sym.attributes[ident->name].type << std::endl;
                     return;
                 }
             }
 
+            // C++ qualified names (std::sqrt, std::string) come from `use <header>`
+            if (ident->name.find("::") != std::string::npos) {
+                return;
+            }
+
             // === FIX: Don't error on unknown symbols during import processing ===
             // Just warn and continue - might be resolved by imports
             warning("Undefined symbol: " + ident->name, ident->line, ident->column);
-            std::cout << "WARNING: Symbol '" << ident->name << "' not found, but continuing..." << std::endl;
+            pycpp::debugLog() << "WARNING: Symbol '" << ident->name << "' not found, but continuing..." << std::endl;
         }
         else {
-            std::cout << "Found identifier: " << ident->name << " : " << symbol->type << std::endl;
+            pycpp::debugLog() << "Found identifier: " << ident->name << " : " << symbol->type << std::endl;
         }
     }
     else if (auto member_access = dynamic_cast<MemberAccess*>(expr)) {
@@ -338,7 +352,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                     // These are built-in memory functions, not actual member access
                     trackBuiltinUsage("mem." + member_access->member);
                     trackBuiltinUsage("cstdlib");
-                    std::cout << "Found built-in memory function: mem." << member_access->member << std::endl;
+                    pycpp::debugLog() << "Found built-in memory function: mem." << member_access->member << std::endl;
                     return;
                 }
             }
@@ -357,7 +371,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                         current_class->name + "'", member_access->line, member_access->column);
                 }
                 else {
-                    std::cout << "Found member access: self." << member_access->member <<
+                    pycpp::debugLog() << "Found member access: self." << member_access->member <<
                         " : " << class_sym.attributes[member_access->member].type << std::endl;
                 }
                 return;
@@ -365,49 +379,49 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
         }
 
         // For other member access, just track it
-        std::cout << "Found member access: " <<
+        pycpp::debugLog() << "Found member access: " <<
             getExpressionType(member_access->object.get()) << "." << member_access->member << std::endl;
     }
     else if (auto int_lit = dynamic_cast<IntLiteral*>(expr)) {
         trackBuiltinUsage("int");
-        std::cout << "Found integer literal: " << int_lit->value << std::endl;
+        pycpp::debugLog() << "Found integer literal: " << int_lit->value << std::endl;
     }
     else if (auto float_lit = dynamic_cast<FloatLiteral*>(expr)) {
         trackBuiltinUsage("float");
-        std::cout << "Found float literal: " << float_lit->value << std::endl;
+        pycpp::debugLog() << "Found float literal: " << float_lit->value << std::endl;
     }
     else if (auto str_lit = dynamic_cast<StringLiteral*>(expr)) {
         trackBuiltinUsage("str");
         trackBuiltinUsage("iostream"); // for potential output
-        std::cout << "Found string literal: " << str_lit->value << std::endl;
+        pycpp::debugLog() << "Found string literal: " << str_lit->value << std::endl;
     }
     else if (auto bool_lit = dynamic_cast<BoolLiteral*>(expr)) {
         trackBuiltinUsage("bool");
-        std::cout << "Found bool literal: " << bool_lit->value << std::endl;
+        pycpp::debugLog() << "Found bool literal: " << bool_lit->value << std::endl;
     }
     else if (auto list_lit = dynamic_cast<ListLiteral*>(expr)) {
         trackBuiltinUsage("vector");
-        std::cout << "Found list literal with " << list_lit->elements.size() << " elements" << std::endl;
+        pycpp::debugLog() << "Found list literal with " << list_lit->elements.size() << " elements" << std::endl;
         for (auto& element : list_lit->elements) {
             analyzeExpression(element.get());
         }
     }
     else if (auto dict_lit = dynamic_cast<DictLiteral*>(expr)) {
         trackBuiltinUsage("map");
-        std::cout << "Found dict literal with " << dict_lit->items.size() << " items" << std::endl;
+        pycpp::debugLog() << "Found dict literal with " << dict_lit->items.size() << " items" << std::endl;
         for (auto& item : dict_lit->items) {
             analyzeExpression(item.first.get());
             analyzeExpression(item.second.get());
         }
     }
     else if (auto bin_op = dynamic_cast<BinaryOp*>(expr)) {
-        std::cout << "Found binary operation: " << bin_op->op << std::endl;
+        pycpp::debugLog() << "Found binary operation: " << bin_op->op << std::endl;
 
         // FIXED: Enhanced compound assignment handling
         if (bin_op->op == "+=" || bin_op->op == "-=" || bin_op->op == "*=" || bin_op->op == "/=") {
             trackBuiltinUsage("compound_ops");
 
-            std::cout << "Compound assignment detected: " << bin_op->op << std::endl;
+            pycpp::debugLog() << "Compound assignment detected: " << bin_op->op << std::endl;
 
             // Analyze left side first to ensure it's a valid assignment target
             analyzeExpression(bin_op->left.get());
@@ -430,7 +444,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                     bin_op->line, bin_op->column);
             }
 
-            std::cout << "Compound assignment analysis completed" << std::endl;
+            pycpp::debugLog() << "Compound assignment analysis completed" << std::endl;
         }
         else {
             // Regular binary operation (not compound assignment)
@@ -448,7 +462,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
         }
     }
     else if (auto call = dynamic_cast<CallExpr*>(expr)) {
-        std::cout << "Found function call" << std::endl;
+        pycpp::debugLog() << "Found function call" << std::endl;
         analyzeExpression(call->callee.get());
         for (auto& arg : call->arguments) {
             analyzeExpression(arg.get());
@@ -485,32 +499,32 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
         }
     }
     else if (auto unary_op = dynamic_cast<UnaryOp*>(expr)) {
-        std::cout << "Found unary operation: " << unary_op->op << std::endl;
+        pycpp::debugLog() << "Found unary operation: " << unary_op->op << std::endl;
         analyzeExpression(unary_op->operand.get());
     }
     else if (auto ternary_op = dynamic_cast<TernaryOp*>(expr)) {
-        std::cout << "Found ternary operation" << std::endl;
+        pycpp::debugLog() << "Found ternary operation" << std::endl;
         analyzeExpression(ternary_op->condition.get());
         analyzeExpression(ternary_op->then_expr.get());
         analyzeExpression(ternary_op->else_expr.get());
     }
     else if (auto none_lit = dynamic_cast<NoneLiteral*>(expr)) {
-        std::cout << "Found None literal" << std::endl;
+        pycpp::debugLog() << "Found None literal" << std::endl;
         // None is valid, no analysis needed
     }
 }
 
 // ===== IMPORT HANDLING =====
 void SemanticAnalyzer::analyzeImportStmt(ImportStmt* import) {
-    std::cout << "Processing import: " << import->module;
+    pycpp::debugLog() << "Processing import: " << import->module;
     if (!import->imports.empty()) {
-        std::cout << " (importing: ";
+        pycpp::debugLog() << " (importing: ";
         for (const auto& item : import->imports) {
-            std::cout << item << " ";
+            pycpp::debugLog() << item << " ";
         }
-        std::cout << ")";
+        pycpp::debugLog() << ")";
     }
-    std::cout << std::endl;
+    pycpp::debugLog() << std::endl;
 
     // Add imported module to symbol table
     addSymbol(import->module, "module", true);
@@ -518,13 +532,26 @@ void SemanticAnalyzer::analyzeImportStmt(ImportStmt* import) {
     // Add individual imports to symbol table
     for (const auto& item : import->imports) {
         addSymbol(item, "imported_symbol", true);
-        std::cout << "Added imported symbol: " << item << std::endl;
+        pycpp::debugLog() << "Added imported symbol: " << item << std::endl;
     }
 }
 
 // Analysis Methods
 void SemanticAnalyzer::analyzeProgram(Program* program) {
-    std::cout << "Analyzing program with " << program->statements.size() << " statements" << std::endl;
+    pycpp::debugLog() << "Analyzing program with " << program->statements.size() << " statements" << std::endl;
+
+    // Generic type parameters and constants are known before any body is analysed
+    for (auto& stmt : program->statements) {
+        if (auto func = dynamic_cast<FunctionDef*>(stmt.get())) {
+            for (const auto& name : func->type_params) generic_params.insert(name);
+        }
+        else if (auto cls = dynamic_cast<ClassDef*>(stmt.get())) {
+            for (const auto& name : cls->type_params) generic_params.insert(name);
+        }
+        else if (auto constant = dynamic_cast<ConstexprDef*>(stmt.get())) {
+            addSymbol(constant->name, typeToString(constant->type.get()), true);
+        }
+    }
 
     // First pass: collect all classes, structs, and functions AND add them to global scope
     for (auto& stmt : program->statements) {
@@ -542,7 +569,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
 
             // === FIX: Add function to global symbol table ===
             addSymbol(func->name, "function", true);
-            std::cout << "Registered and added to symbol table function: " << func->name << " -> " << func_sym.return_type << std::endl;
+            pycpp::debugLog() << "Registered and added to symbol table function: " << func->name << " -> " << func_sym.return_type << std::endl;
         }
         else if (auto cls = dynamic_cast<ClassDef*>(stmt.get())) {
             ClassSymbol cls_sym;
@@ -552,7 +579,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
 
             // === FIX: Add class to global symbol table ===
             addSymbol(cls->name, "class", true);
-            std::cout << "Registered and added to symbol table class: " << cls->name << std::endl;
+            pycpp::debugLog() << "Registered and added to symbol table class: " << cls->name << std::endl;
         }
         else if (auto struc = dynamic_cast<StructDef*>(stmt.get())) {
             ClassSymbol cls_sym;
@@ -561,13 +588,13 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
 
             // === FIX: Add struct to global symbol table ===
             addSymbol(struc->name, "class", true);
-            std::cout << "Registered and added to symbol table struct: " << struc->name << std::endl;
+            pycpp::debugLog() << "Registered and added to symbol table struct: " << struc->name << std::endl;
         }
         else if (auto import = dynamic_cast<ImportStmt*>(stmt.get())) {
-            std::cout << "Found import: " << import->module << std::endl;
+            pycpp::debugLog() << "Found import: " << import->module << std::endl;
         }
         else if (auto use = dynamic_cast<UseStmt*>(stmt.get())) {
-            std::cout << "Found use statement: " << use->library << std::endl;
+            pycpp::debugLog() << "Found use statement: " << use->library << std::endl;
         }
     }
 
@@ -610,7 +637,7 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
     }
     else if (auto use_stmt = dynamic_cast<UseStmt*>(stmt)) {
         // Use statements are for C++ headers
-        std::cout << "Found use statement for library: " << use_stmt->library << std::endl;
+        pycpp::debugLog() << "Found use statement for library: " << use_stmt->library << std::endl;
     }
     else if (auto unsafe_block = dynamic_cast<UnsafeBlock*>(stmt)) {
         enterScope();
@@ -640,7 +667,7 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
     if (var->var_name.find("self.") == 0) {
         // This is a member variable declaration in a class
         std::string member_name = var->var_name.substr(5); // Remove "self." prefix
-        std::cout << "Processing member variable: " << member_name << " : " << type_name << std::endl;
+        pycpp::debugLog() << "Processing member variable: " << member_name << " : " << type_name << std::endl;
 
         // Don't add to regular symbol table - it will be handled by class analysis
         if (current_class) {
@@ -653,11 +680,11 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
                     var->value != nullptr,
                     0 // class scope
                 };
-                std::cout << "Stored class attribute: " << current_class->name << "." << member_name
+                pycpp::debugLog() << "Stored class attribute: " << current_class->name << "." << member_name
                     << " : " << type_name << std::endl;
             }
             else {
-                std::cout << "Class attribute already exists: " << current_class->name << "." << member_name << std::endl;
+                pycpp::debugLog() << "Class attribute already exists: " << current_class->name << "." << member_name << std::endl;
             }
         }
     }
@@ -665,7 +692,7 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
         // === FIX: Check if we're in a struct context ===
         if (current_class && classes[current_class->name].is_struct) {
             // In struct context, don't add fields to global scope
-            std::cout << "Skipping global scope addition for struct field: " << var->var_name << std::endl;
+            pycpp::debugLog() << "Skipping global scope addition for struct field: " << var->var_name << std::endl;
         }
         else {
             // Regular variable declaration - check if already declared in current scope
@@ -691,13 +718,13 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
         }
     }
 
-    std::cout << "Analyzed variable declaration: " << var->var_name << " : " << type_name << std::endl;
+    pycpp::debugLog() << "Analyzed variable declaration: " << var->var_name << " : " << type_name << std::endl;
 }
 
 void SemanticAnalyzer::extractMembersFromConstructor(FunctionDef* constructor, ClassDef* cls) {
     if (!constructor || !cls) return;
 
-    std::cout << "Extracting members from constructor for class: " << cls->name << std::endl;
+    pycpp::debugLog() << "Extracting members from constructor for class: " << cls->name << std::endl;
 
     // Look for member assignments in constructor body
     for (auto& stmt : constructor->body) {
@@ -716,7 +743,7 @@ void SemanticAnalyzer::extractMembersFromConstructor(FunctionDef* constructor, C
                         var_decl->value != nullptr,
                         0
                     };
-                    std::cout << "Extracted member from constructor declaration: "
+                    pycpp::debugLog() << "Extracted member from constructor declaration: "
                         << cls->name << "." << member_name << " : " << member_type << std::endl;
                 }
             }
@@ -748,7 +775,7 @@ void SemanticAnalyzer::extractMembersFromConstructor(FunctionDef* constructor, C
                                         true, // Has initializer
                                         0
                                     };
-                                    std::cout << "Extracted member from constructor assignment: "
+                                    pycpp::debugLog() << "Extracted member from constructor assignment: "
                                         << cls->name << "." << member_name << " : " << member_type << std::endl;
                                 }
                             }
@@ -761,10 +788,20 @@ void SemanticAnalyzer::extractMembersFromConstructor(FunctionDef* constructor, C
 }
 
 void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
-    std::cout << "Analyzing function: " << func->name << std::endl;
+    pycpp::debugLog() << "Analyzing function: " << func->name << std::endl;
 
     // Set current function context
-    current_function = &functions[func->name];
+    // A method must not touch (or be confused with) a free function of the same name,
+    // so it gets its own symbol, filled from its declaration.
+    FunctionSymbol method_symbol;
+    if (current_class) {
+        method_symbol.name = func->name;
+        method_symbol.return_type = typeToString(func->return_type.get());
+        current_function = &method_symbol;
+    }
+    else {
+        current_function = &functions[func->name];
+    }
     current_function->has_return = false;
 
     enterScope(); // Function scope
@@ -773,7 +810,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
     for (const auto& param : func->parameters) {
         std::string param_type = typeToString(param.type.get());
         addSymbol(param.name, param_type, true);
-        std::cout << "Added parameter to function scope: " << param.name << " : " << param_type << std::endl;
+        pycpp::debugLog() << "Added parameter to function scope: " << param.name << " : " << param_type << std::endl;
     }
 
     // FIXED: Single pass for analyzing function body
@@ -783,7 +820,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
     }
 
     // Check return type - don't warn for constructors
-    if (current_function->return_type != "void" &&
+    const std::string declared_return = typeToString(func->return_type.get());
+    if (declared_return != "void" && declared_return != "None" && declared_return != "auto" &&
         !current_function->has_return &&
         func->name != "__init__") {  // Don't warn for constructors
         warning("Function '" + func->name + "' may not return a value", func->line, func->column);
@@ -794,7 +832,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
 }
 
 void SemanticAnalyzer::analyzeClass(ClassDef* cls) {
-    std::cout << "Analyzing class: " << cls->name << std::endl;
+    pycpp::debugLog() << "Analyzing class: " << cls->name << std::endl;
 
     current_class = &classes[cls->name];
 
@@ -819,7 +857,7 @@ void SemanticAnalyzer::analyzeClass(ClassDef* cls) {
 }
 
 void SemanticAnalyzer::analyzeStruct(StructDef* struc) {
-    std::cout << "Analyzing struct: " << struc->name << std::endl;
+    pycpp::debugLog() << "Analyzing struct: " << struc->name << std::endl;
 
     // Create a dedicated scope for this struct
     ClassSymbol& struct_sym = classes[struc->name];
@@ -838,7 +876,7 @@ void SemanticAnalyzer::analyzeStruct(StructDef* struc) {
             0 // struct scope
         };
 
-        std::cout << "Added struct field: " << struc->name << "." << field_name
+        pycpp::debugLog() << "Added struct field: " << struc->name << "." << field_name
             << " : " << field_type << std::endl;
 
         // Analyze initializer expression if present
@@ -912,17 +950,15 @@ void SemanticAnalyzer::analyzeWhileStmt(WhileStmt* while_stmt) {
 void SemanticAnalyzer::analyzeForStmt(ForStmt* for_stmt) {
     analyzeExpression(for_stmt->iterable.get());
     enterScope();
-    addSymbol(for_stmt->var_name, "auto", true);
+    if (for_stmt->var_names.empty()) {
+        addSymbol(for_stmt->var_name, "auto", true);
+    }
+    else {
+        for (const auto& name : for_stmt->var_names) addSymbol(name, "auto", true);
+    }
 
-    // Track if we find a return statement in the loop
-    bool has_return_in_loop = false;
     for (auto& stmt : for_stmt->body) {
         analyzeStatement(stmt.get());
-        if (dynamic_cast<ReturnStmt*>(stmt.get())) {
-            has_return_in_loop = true;
-            warning("Return statement inside for loop may cause unexpected behavior",
-                stmt->line, stmt->column);
-        }
     }
 
     exitScope();
@@ -953,23 +989,19 @@ void SemanticAnalyzer::trackBuiltinUsage(const std::string& builtin) {
 }
 
 // Error Reporting
-void SemanticAnalyzer::error(const std::string& message, int line, int column) {
-    std::string error_msg = "Semantic Error";
-    if (line > 0) error_msg += " at line " + std::to_string(line);
-    if (column > 0) error_msg += ":" + std::to_string(column);
-    error_msg += ": " + message;
+static std::string location(int line, int column) {
+    if (line <= 0) return "";
+    std::string text = "line " + std::to_string(line);
+    if (column > 0) text += ":" + std::to_string(column);
+    return text + ": ";
+}
 
-    std::cerr << error_msg << std::endl;
-    throw std::runtime_error(error_msg);
+void SemanticAnalyzer::error(const std::string& message, int line, int column) {
+    throw std::runtime_error(location(line, column) + "semantic error: " + message); // reported once, by the caller
 }
 
 void SemanticAnalyzer::warning(const std::string& message, int line, int column) {
-    std::string warn_msg = "Semantic Warning";
-    if (line > 0) warn_msg += " at line " + std::to_string(line);
-    if (column > 0) warn_msg += ":" + std::to_string(column);
-    warn_msg += ": " + message;
-
-    std::cout << warn_msg << std::endl;
+    std::cerr << "warning: " << location(line, column) << message << std::endl;
 }
 
 // Visitor pattern implementations (delegate to analysis methods)

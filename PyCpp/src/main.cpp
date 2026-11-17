@@ -28,81 +28,75 @@
 #include "../include/header_generator.h"
 #include "../include/import_resolver.h"
 #include "../include/compiler_backend.h"
+#include "../include/log.h"
 
 // Terminal output formatting
 class TerminalFormatter {
+    // Progress and status lines appear only with -v / --verbose.
+    static void status(const std::string& message) {
+        if (pycpp::verboseFlag()) std::cout << "   " << message << std::endl;
+    }
+
 public:
-    static void printInfo(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
-
-    static void printSuccess(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
-
-    static void printWarning(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
-
-    static void printError(const std::string& message) {
-        std::cerr << "   " << message << std::endl;
-    }
-
-    static void printFile(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
-
-    static void printCompile(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
-
-    static void printRun(const std::string& message) {
-        std::cout << "   " << message << std::endl;
-    }
+    static void printInfo(const std::string& message) { status(message); }
+    static void printSuccess(const std::string& message) { status(message); }
+    static void printFile(const std::string& message) { status(message); }
+    static void printCompile(const std::string& message) { status(message); }
+    static void printRun(const std::string& message) { status(message); }
+    static void printSubsection(const std::string& message) { status(message); }
+    static void printSettingUp() { status("Setting up Visual Studio environment..."); }
+    static void printCompiling(const std::string& filename) { status("Compiling " + filename + "..."); }
+    static void printFilename(const std::string& filename) { status(filename); }
+    static void printRunning(const std::string& filename) { status("Running " + filename + "..."); }
 
     static void printSection(const std::string& message) {
+        if (!pycpp::verboseFlag()) return;
         std::cout << "\n" << std::string(60, '=') << std::endl;
         std::cout << " " << message << std::endl;
         std::cout << std::string(60, '=') << std::endl;
     }
 
-    static void printSubsection(const std::string& message) {
-        std::cout << "   " << message << std::endl;
+    // The outcome of a command the user explicitly asked for (e.g. --no-compile).
+    static void printResult(const std::string& message) {
+        std::cout << message << std::endl;
+    }
+
+    static void printNote(const std::string& message) {
+        std::cerr << "note: " << message << std::endl;
+    }
+
+    // Warnings and errors are always shown, on stderr.
+    static void printWarning(const std::string& message) {
+        std::cerr << "warning: " << message << std::endl;
+    }
+
+    static void printError(const std::string& message) {
+        std::cerr << "error: " << message << std::endl;
     }
 
     static void printProgramOutput(const std::string& output) {
-        std::cout << "   " << output;
+        std::cout << output;
     }
 
+    // Compiler diagnostics (g++/cl output) are always shown.
     static void printCompilerOutput(const std::string& output) {
         if (!output.empty() && output != "\n") {
-            std::cout << "   " << output;
+            std::cerr << output;
         }
     }
 
-    // New methods for clean formatting
-    static void printSettingUp() {
-        std::cout << "   Setting up Visual Studio environment..." << std::endl;
-    }
-
-    static void printCompiling(const std::string& filename) {
-        std::cout << "   Compiling " << filename << "..." << std::endl;
-    }
-
-    static void printFilename(const std::string& filename) {
-        std::cout << "   " << filename << std::endl;
-    }
-
-    static void printRunning(const std::string& filename) {
-        std::cout << "   Running " << filename << "..." << std::endl;
-    }
-
+    // The compiled program's own output: untouched, so it can be piped.
     static void printProgramOutputLine(const std::string& line) {
-        std::cout << "   " << line << std::endl;
+        std::cout << line << std::endl;
     }
 
     static void printExitCode(int code) {
-        std::cout << "   PROGRAM_EXIT_CODE:" << code << std::endl;
+        if (pycpp::verboseFlag()) {
+            std::cout << "   PROGRAM_EXIT_CODE:" << code << std::endl;
+        }
+        else if (code != 0) {
+            std::cerr << "Program exited with code " << code << std::endl;
+        }
     }
 };
 
@@ -302,7 +296,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
     }
 
     TerminalFormatter::printRunning(exeFile);
-    std::cout << std::endl;
+    if (pycpp::verboseFlag()) std::cout << std::endl;
     int exitCode = CompilerBackend::run(exeFile, [](const std::string& line) {
         TerminalFormatter::printProgramOutputLine(line);
     });
@@ -377,8 +371,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose);
 
         if (!compilationSuccess) {
-            TerminalFormatter::printWarning("Could not compile the generated C++ code");
-            TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
+            TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
             return false;
         }
 
@@ -415,7 +408,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         return true;
     }
     catch (const std::exception& e) {
-        TerminalFormatter::printError("Multi-file compilation failed: " + std::string(e.what()));
+        TerminalFormatter::printError(e.what());
         return false;
     }
 }
@@ -470,8 +463,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose);
 
         if (!compilationSuccess) {
-            TerminalFormatter::printWarning("Could not compile the generated C++ code");
-            TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
+            TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
             return false;
         }
 
@@ -501,7 +493,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         return true;
     }
     catch (const std::exception& e) {
-        TerminalFormatter::printError("Compilation failed: " + std::string(e.what()));
+        TerminalFormatter::printError(e.what());
         return false;
     }
 }
@@ -537,11 +529,11 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
             IncludeManager include_manager;
             generateHeaderAndImplementation(ast, outputBase, include_manager);
 
-            TerminalFormatter::printSuccess("Generated " + outputBase + ".h and " + outputBase + ".cpp");
+            TerminalFormatter::printResult("Generated " + outputBase + ".h and " + outputBase + ".cpp");
             return true;
         }
         catch (const std::exception& e) {
-            TerminalFormatter::printError("Compilation failed: " + std::string(e.what()));
+            TerminalFormatter::printError(e.what());
             return false;
         }
     }
@@ -578,6 +570,7 @@ int main(int argc, char* argv[]) {
         }
         else if (arg == "-v" || arg == "--verbose") {
             verbose = true;
+            pycpp::setVerbose(true);
         }
         else if (arg == "--keep-temp") {
             keepTemp = true;

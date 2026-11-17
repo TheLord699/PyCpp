@@ -2,10 +2,7 @@
 #include <algorithm>
 
 IncludeManager::IncludeManager() {
-    // Initialize with common headers that are almost always needed
-    used_features.insert("iostream");
-    used_features.insert("string");
-    used_features.insert("vector");
+    // Nothing is assumed: headers are added only for features the program uses.
 }
 
 void IncludeManager::trackFeature(const std::string& feature) {

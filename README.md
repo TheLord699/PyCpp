@@ -285,7 +285,7 @@ Features:
 
 ### **7.1 High-level vs low-level: what the compiler generates**
 
-The PyCPP you write (high level) and the C++20 the compiler produces from it (low level), side by side.
+The same program in three forms: high-level PyCPP (Python-like defaults), low-level PyCPP (explicit references, pointers and manual memory), and the C++20 the compiler generates.
 
 **High level — PyCPP (`main.pycpp`)**
 
@@ -308,7 +308,7 @@ def main() -> int:
     return 0
 ```
 
-**Low level — generated C++20 (`main.cpp`)**
+**Generated C++20 from the high-level version (`main.cpp`)**
 
 ```cpp
 #include <iostream>   // added automatically: print()
@@ -366,6 +366,88 @@ Notes:
 - A `str` parameter taken by value is moved into the member (`std::move`), so constructing a `Player` costs no extra string copy.
 - Class members are `public` by default, matching Python's attribute access.
 - `print()` writes `'\n'` rather than `std::endl`, so it doesn't force a flush on every call.
+
+**Low level — PyCPP (`main_lowlevel.pycpp`)**
+
+The same behaviour, written with the explicit argument and memory features from sections 4 and 5. It is still PyCPP source, not C++.
+
+```python
+class Player:
+    def __init__(self, name: const &str, health: int):
+        self.name: str = name
+        self.health: int = health
+
+    def damage(self, amount: int) -> void:
+        self.health -= amount
+
+def damage_player(player: *Player, amount: int) -> void:
+    unsafe:
+        player.damage(amount)
+
+def main() -> int:
+    player: *Player = mem.alloc[Player]("Alex", 100)
+
+    damage_player(player, 20)
+
+    unsafe:
+        print(player.health)
+
+    mem.free(player)
+
+    return 0
+```
+
+**Generated C++20 from the low-level version**
+
+```cpp
+#include <iostream>
+#include <string>
+
+class Player {
+public:
+    std::string name;
+    int health;
+
+    Player(const std::string& name, int health)
+        : name(name), health(health) {}
+
+    void damage(int amount) {
+        this->health -= amount;
+    }
+};
+
+void damage_player(Player* player, int amount) {
+    player->damage(amount);
+}
+
+int main() {
+    Player* player = new Player("Alex", 100);
+
+    damage_player(player, 20);
+
+    std::cout << player->health << '\n';
+
+    delete player;
+
+    return 0;
+}
+```
+
+What changes between the two PyCPP versions:
+
+| High level                                | Low level                                        | C++ (low level)                          |
+| ----------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| `name: str` (passed by value)             | `name: const &str` (immutable reference)         | `const std::string& name`                |
+| `player: Player = Player("Alex", 100)`    | `player: *Player = mem.alloc[Player](...)`       | `Player* player = new Player(...)`       |
+| `player.damage(20)`                       | `damage_player(player, 20)` taking `*Player`     | `player->damage(amount)`                 |
+| `player.health` (safe access)             | `unsafe:` block around pointer access            | `player->health`                         |
+| Destroyed automatically at end of scope   | `mem.free(player)` called explicitly             | `delete player;`                         |
+
+Notes:
+
+- The spec only shows `mem.alloc[T]()` with no arguments. Passing constructor arguments (`mem.alloc[Player]("Alex", 100)`) is an assumption made here so the example stays equivalent to the high-level one; the spec would need to define it.
+- Both versions print `80` and behave identically. The low-level one leaves lifetime and access safety to the programmer: forgetting `mem.free` leaks the object, and using `player` after it would be undefined behaviour.
+- The `const &str` constructor parameter copies the string into the member, since a reference can't be moved from the way a by-value parameter can.
 
 # **8. Structs**
 

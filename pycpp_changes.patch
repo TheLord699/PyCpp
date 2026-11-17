@@ -1,0 +1,1302 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 436c1d2..345dc0a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -29,7 +29,8 @@ add_executable(PyCpp
+     "PyCpp/src/ast.cpp"
+     "PyCpp/src/include_manager.cpp"
+     "PyCpp/src/header_generator.cpp"
+-    "PyCpp/src/import_resolver.cpp"  # Only .cpp files here
++    "PyCpp/src/import_resolver.cpp"
++    "PyCpp/src/compiler_backend.cpp"  # Only .cpp files here
+ )
+ 
+ # Include directories
+diff --git a/CMakePresets.json b/CMakePresets.json
+index abf4065..4210f6c 100644
+--- a/CMakePresets.json
++++ b/CMakePresets.json
+@@ -19,7 +19,7 @@
+         },
+         {
+             "name": "x64-debug",
+-            "displayName": "x64 Debug",
++            "displayName": "x64 Debug (MSVC)",
+             "inherits": "windows-base",
+             "architecture": {
+                 "value": "x64",
+@@ -31,7 +31,7 @@
+         },
+         {
+             "name": "x64-release",
+-            "displayName": "x64 Release",
++            "displayName": "x64 Release (MSVC)",
+             "inherits": "x64-debug",
+             "cacheVariables": {
+                 "CMAKE_BUILD_TYPE": "Release"
+@@ -39,7 +39,7 @@
+         },
+         {
+             "name": "x86-debug",
+-            "displayName": "x86 Debug",
++            "displayName": "x86 Debug (MSVC)",
+             "inherits": "windows-base",
+             "architecture": {
+                 "value": "x86",
+@@ -51,11 +51,79 @@
+         },
+         {
+             "name": "x86-release",
+-            "displayName": "x86 Release",
++            "displayName": "x86 Release (MSVC)",
+             "inherits": "x86-debug",
+             "cacheVariables": {
+                 "CMAKE_BUILD_TYPE": "Release"
+             }
++        },
++        {
++            "name": "linux-gcc-debug",
++            "displayName": "Linux GCC Debug",
++            "generator": "Unix Makefiles",
++            "binaryDir": "${sourceDir}/out/build/${presetName}",
++            "installDir": "${sourceDir}/out/install/${presetName}",
++            "cacheVariables": {
++                "CMAKE_C_COMPILER": "gcc",
++                "CMAKE_CXX_COMPILER": "g++",
++                "CMAKE_BUILD_TYPE": "Debug"
++            },
++            "condition": {
++                "type": "equals",
++                "lhs": "${hostSystemName}",
++                "rhs": "Linux"
++            }
++        },
++        {
++            "name": "linux-gcc-release",
++            "displayName": "Linux GCC Release",
++            "generator": "Unix Makefiles",
++            "binaryDir": "${sourceDir}/out/build/${presetName}",
++            "installDir": "${sourceDir}/out/install/${presetName}",
++            "cacheVariables": {
++                "CMAKE_C_COMPILER": "gcc",
++                "CMAKE_CXX_COMPILER": "g++",
++                "CMAKE_BUILD_TYPE": "Release"
++            },
++            "condition": {
++                "type": "equals",
++                "lhs": "${hostSystemName}",
++                "rhs": "Linux"
++            }
++        },
++        {
++            "name": "windows-gcc-debug",
++            "displayName": "Windows GCC (MinGW) Debug",
++            "generator": "Ninja",
++            "binaryDir": "${sourceDir}/out/build/${presetName}",
++            "installDir": "${sourceDir}/out/install/${presetName}",
++            "cacheVariables": {
++                "CMAKE_C_COMPILER": "gcc",
++                "CMAKE_CXX_COMPILER": "g++",
++                "CMAKE_BUILD_TYPE": "Debug"
++            },
++            "condition": {
++                "type": "equals",
++                "lhs": "${hostSystemName}",
++                "rhs": "Windows"
++            }
++        },
++        {
++            "name": "windows-gcc-release",
++            "displayName": "Windows GCC (MinGW) Release",
++            "generator": "Ninja",
++            "binaryDir": "${sourceDir}/out/build/${presetName}",
++            "installDir": "${sourceDir}/out/install/${presetName}",
++            "cacheVariables": {
++                "CMAKE_C_COMPILER": "gcc",
++                "CMAKE_CXX_COMPILER": "g++",
++                "CMAKE_BUILD_TYPE": "Release"
++            },
++            "condition": {
++                "type": "equals",
++                "lhs": "${hostSystemName}",
++                "rhs": "Windows"
++            }
+         }
+     ]
+-}
++}
+\ No newline at end of file
+diff --git a/PyCpp/include/code_generator.h b/PyCpp/include/code_generator.h
+index 3aa4cba..972977f 100644
+--- a/PyCpp/include/code_generator.h
++++ b/PyCpp/include/code_generator.h
+@@ -5,6 +5,8 @@
+ #include "include_manager.h"
+ #include <sstream>
+ #include <memory>
++#include <set>
++#include <string>
+ 
+ class CodeGenerator : public ASTVisitor {
+ private:
+@@ -12,6 +14,7 @@ private:
+     int indent_level;
+     FunctionDef* current_function;
+     ClassDef* current_class;
++    std::set<std::string> imported_modules; // identifiers that name an imported module
+ 
+     void indent();
+     void dedent();
+diff --git a/PyCpp/include/compiler_backend.h b/PyCpp/include/compiler_backend.h
+new file mode 100644
+index 0000000..eb56d70
+--- /dev/null
++++ b/PyCpp/include/compiler_backend.h
+@@ -0,0 +1,55 @@
++#ifndef COMPILER_BACKEND_H
++#define COMPILER_BACKEND_H
++
++#include <functional>
++#include <string>
++#include <vector>
++
++// The C++ compiler used to build the C++ that PyCPP generates.
++enum class CompilerKind {
++    Auto, // pick a sensible default for the current platform
++    Gcc,  // g++ (GCC, or MinGW on Windows)
++    Msvc  // cl.exe from Visual Studio (Windows only)
++};
++
++// Everything a backend needs to turn generated .cpp files into an executable.
++struct CompileRequest {
++    std::vector<std::string> cppFiles; // generated implementation files (all modules)
++    std::string exeFile;               // output executable path
++    std::string includeDir;            // directory holding the generated headers
++};
++
++class CompilerBackend {
++public:
++    // Accepts "gcc", "g++", "msvc", "cl" or "auto" (case-insensitive).
++    // Returns false and leaves `out` untouched for anything else.
++    static bool parseKind(const std::string& name, CompilerKind& out);
++
++    // Auto -> MSVC on Windows (the historical default), gcc everywhere else.
++    static CompilerKind resolve(CompilerKind requested);
++
++    static std::string displayName(CompilerKind kind);
++
++    // Extension of the executable the compiler produces ("" or ".exe").
++    static std::string exeExtension(CompilerKind kind);
++
++    // Pure functions: build the text that would be executed. Kept free of side
++    // effects so they can be unit-tested on any platform.
++    static std::string buildCompileCommand(CompilerKind kind, const CompileRequest& request);
++    static std::string buildMsvcBatch(const CompileRequest& request);
++
++    // Is the compiler usable right now? On failure `reason` explains why.
++    static bool isAvailable(CompilerKind kind, std::string& reason);
++
++    // Compile the request. Compiler diagnostics are passed to `onOutput` line by
++    // line. Returns true when an executable was produced.
++    static bool compile(CompilerKind kind, const CompileRequest& request, bool verbose,
++        const std::function<void(const std::string&)>& onOutput);
++
++    // Run a finished executable, passing its output to `onOutput` line by line.
++    // Returns the program's exit code, or -1 if it could not be started.
++    static int run(const std::string& exeFile,
++        const std::function<void(const std::string&)>& onOutput);
++};
++
++#endif // COMPILER_BACKEND_H
+diff --git a/PyCpp/include/pycpp_parser.h b/PyCpp/include/pycpp_parser.h
+index fbdd1c0..231eb55 100644
+--- a/PyCpp/include/pycpp_parser.h
++++ b/PyCpp/include/pycpp_parser.h
+@@ -23,6 +23,8 @@ private:
+     Token consume(TokenType type, const std::string& error_msg);
+     bool atEnd();
+     void synchronize();
++    void synchronizeInBlock();
++    void skipIndentedRegion();
+     void handleIndentation();
+     bool isBuiltInFunctionToken(TokenType type);
+ 
+diff --git a/PyCpp/src/code_generator.cpp b/PyCpp/src/code_generator.cpp
+index b94d2a3..346219b 100644
+--- a/PyCpp/src/code_generator.cpp
++++ b/PyCpp/src/code_generator.cpp
+@@ -257,10 +257,14 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
+ 
+     // Extract imports to generate includes
+     std::vector<std::string> import_includes;
++    imported_modules.clear();
+     for (auto& stmt : program->statements) {
+         if (auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get())) {
+             // Generate include for imported module
+             import_includes.push_back("\"" + import_stmt->module + ".h\"");
++            // Remember the module name so 'module.member' can be told apart
++            // from 'object.member'
++            imported_modules.insert(import_stmt->module);
+         }
+     }
+ 
+@@ -269,8 +273,10 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
+     for (const auto& include : includes) {
+         // Extract just the filename if it's a local header with full path
+         std::string include_stmt = include;
+-        if (include[0] == '"' && include.find("temp\\") != std::string::npos) {
+-            // Extract just the filename from paths like "C:\Users\...\temp\test_output.h"
++        if (!include.empty() && include[0] == '"' && include.find_first_of("\\/") != std::string::npos) {
++            // Generated headers sit next to their .cpp file, so a quoted local include
++            // is reduced to its bare filename. This covers both separators, e.g.
++            // "C:\Users\...\temp\test_output.h" and "src/temp/test_output.h".
+             size_t last_slash = include.find_last_of("\\/");
+             size_t end_quote = include.find_last_of('"');
+             if (last_slash != std::string::npos && end_quote != std::string::npos) {
+@@ -1683,8 +1689,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
+     else if (auto member_access = dynamic_cast<MemberAccess*>(expr)) {
+         // Check if this is module access (like greetings.hello)
+         if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
+-            // Check if this identifier is a module (imported symbol)
+-            if (ident->name != "self" && ident->name != "this") {
++            // Only identifiers that name an imported module are module accesses;
++            // anything else (e.g. a local variable 'player') is an object access
++            if (ident->name != "self" && ident->name != "this" &&
++                imported_modules.count(ident->name) > 0) {
+                 // This is likely a module access like greetings.hello
+                 // For now, generate as direct function call since we include the header
+                 // In a more advanced implementation, we might use namespaces
+diff --git a/PyCpp/src/compiler_backend.cpp b/PyCpp/src/compiler_backend.cpp
+new file mode 100644
+index 0000000..4498b1c
+--- /dev/null
++++ b/PyCpp/src/compiler_backend.cpp
+@@ -0,0 +1,239 @@
++#include "../include/compiler_backend.h"
++
++#include <algorithm>
++#include <cctype>
++#include <cstdio>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++
++#ifdef _WIN32
++#include <io.h>
++#include <process.h>
++#define PYCPP_POPEN _popen
++#define PYCPP_PCLOSE _pclose
++#else
++#include <sys/wait.h>
++#define PYCPP_POPEN popen
++#define PYCPP_PCLOSE pclose
++#endif
++
++namespace {
++
++// C++ language standard passed to both compilers, so gcc and MSVC build the
++// generated code the same way.
++const char* const kCppStandard = "17";
++
++// Visual Studio environment script used when cl.exe is not already on PATH.
++const char* const kVcVarsPath =
++    "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat";
++
++std::string toLower(std::string s) {
++    std::transform(s.begin(), s.end(), s.begin(),
++        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++    return s;
++}
++
++// Quote one command-line argument for the shell that popen() uses.
++std::string quoteArg(const std::string& s) {
++#ifdef _WIN32
++    return "\"" + s + "\"";
++#else
++    std::string out = "'";
++    for (char c : s) {
++        if (c == '\'') out += "'\\''";
++        else out += c;
++    }
++    return out + "'";
++#endif
++}
++
++// MSVC is always driven through cmd.exe, so its arguments always use double quotes.
++std::string quoteArgWindows(const std::string& s) {
++    return "\"" + s + "\"";
++}
++
++// Convert a pclose()/system() status into the child's exit code.
++int exitCodeFromStatus(int status) {
++    if (status == -1) return -1;
++#ifdef _WIN32
++    return status;
++#else
++    if (WIFEXITED(status)) return WEXITSTATUS(status);
++    return -1;
++#endif
++}
++
++// Run a shell command and pass its combined output to `onOutput` line by line.
++// Returns the exit code, or -1 if the command could not be started.
++int runCommand(const std::string& command,
++    const std::function<void(const std::string&)>& onOutput) {
++    FILE* pipe = PYCPP_POPEN(command.c_str(), "r");
++    if (!pipe) return -1;
++
++    std::string line;
++    char buffer[4096];
++    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
++        line += buffer;
++        if (!line.empty() && line.back() == '\n') {
++            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
++                line.pop_back();
++            }
++            if (onOutput) onOutput(line);
++            line.clear();
++        }
++    }
++    if (!line.empty() && onOutput) onOutput(line); // last line without newline
++
++    return exitCodeFromStatus(PYCPP_PCLOSE(pipe));
++}
++
++bool quietCommandSucceeds(const std::string& command) {
++#ifdef _WIN32
++    const std::string quiet = command + " >nul 2>&1";
++#else
++    const std::string quiet = command + " >/dev/null 2>&1";
++#endif
++    return exitCodeFromStatus(std::system(quiet.c_str())) == 0;
++}
++
++} // namespace
++
++bool CompilerBackend::parseKind(const std::string& name, CompilerKind& out) {
++    const std::string n = toLower(name);
++    if (n == "auto") { out = CompilerKind::Auto; return true; }
++    if (n == "gcc" || n == "g++") { out = CompilerKind::Gcc; return true; }
++    if (n == "msvc" || n == "cl") { out = CompilerKind::Msvc; return true; }
++    return false;
++}
++
++CompilerKind CompilerBackend::resolve(CompilerKind requested) {
++    if (requested != CompilerKind::Auto) return requested;
++#ifdef _WIN32
++    return CompilerKind::Msvc;
++#else
++    return CompilerKind::Gcc;
++#endif
++}
++
++std::string CompilerBackend::displayName(CompilerKind kind) {
++    switch (resolve(kind)) {
++    case CompilerKind::Gcc:  return "gcc (g++)";
++    case CompilerKind::Msvc: return "MSVC (cl.exe)";
++    default:                 return "auto";
++    }
++}
++
++std::string CompilerBackend::exeExtension(CompilerKind kind) {
++    if (resolve(kind) == CompilerKind::Msvc) return ".exe";
++#ifdef _WIN32
++    return ".exe"; // MinGW also produces .exe
++#else
++    return "";
++#endif
++}
++
++std::string CompilerBackend::buildCompileCommand(CompilerKind kind, const CompileRequest& request) {
++    std::string command;
++
++    if (resolve(kind) == CompilerKind::Msvc) {
++        command = std::string("cl /EHsc /std:c++") + kCppStandard;
++        for (const auto& file : request.cppFiles) {
++            command += " " + quoteArgWindows(file);
++        }
++        command += " /Fe" + quoteArgWindows(request.exeFile);
++        command += " /I" + quoteArgWindows(request.includeDir);
++        command += " /nologo";
++    }
++    else {
++        command = std::string("g++ -std=c++") + kCppStandard;
++        for (const auto& file : request.cppFiles) {
++            command += " " + quoteArg(file);
++        }
++        command += " -o " + quoteArg(request.exeFile);
++        command += " -I" + quoteArg(request.includeDir);
++    }
++
++    return command;
++}
++
++std::string CompilerBackend::buildMsvcBatch(const CompileRequest& request) {
++    // Use cl.exe as-is when it is already on PATH (e.g. a Developer Command
++    // Prompt); otherwise load the Visual Studio environment first.
++    return
++        "@echo off\r\n"
++        "where cl >nul 2>&1\r\n"
++        "if %errorlevel% equ 0 goto compile\r\n"
++        "call \"" + std::string(kVcVarsPath) + "\" >nul 2>&1\r\n"
++        "if %errorlevel% neq 0 (\r\n"
++        "  echo Failed to set up the Visual Studio environment\r\n"
++        "  exit /b 1\r\n"
++        ")\r\n"
++        ":compile\r\n" +
++        buildCompileCommand(CompilerKind::Msvc, request) + "\r\n"
++        "exit /b %errorlevel%\r\n";
++}
++
++bool CompilerBackend::isAvailable(CompilerKind kind, std::string& reason) {
++    switch (resolve(kind)) {
++    case CompilerKind::Gcc:
++        if (quietCommandSucceeds("g++ --version")) return true;
++        reason = "g++ was not found on PATH. Install GCC (on Windows, MinGW-w64 or MSYS2) "
++                 "or choose another compiler with --compiler msvc.";
++        return false;
++
++    case CompilerKind::Msvc:
++#ifdef _WIN32
++        if (quietCommandSucceeds("where cl")) return true;
++        if (std::filesystem::exists(kVcVarsPath)) return true;
++        reason = "Visual Studio 2022 (cl.exe) was not found. Run from a Developer Command "
++                 "Prompt, install Visual Studio 2022 Community, or choose --compiler gcc.";
++        return false;
++#else
++        reason = "MSVC (cl.exe) is only available on Windows. Use --compiler gcc.";
++        return false;
++#endif
++
++    default:
++        reason = "no compiler selected";
++        return false;
++    }
++}
++
++bool CompilerBackend::compile(CompilerKind kind, const CompileRequest& request, bool verbose,
++    const std::function<void(const std::string&)>& onOutput) {
++    const CompilerKind resolved = resolve(kind);
++
++    // Remove a stale executable so success is judged on this build only.
++    std::error_code ec;
++    std::filesystem::remove(request.exeFile, ec);
++
++    int code = -1;
++
++    if (resolved == CompilerKind::Msvc) {
++        const std::string batchFile = request.includeDir + "\\compile_msvc.bat";
++        {
++            std::ofstream batch(batchFile, std::ios::binary);
++            if (!batch) {
++                if (onOutput) onOutput("Could not create build script: " + batchFile);
++                return false;
++            }
++            batch << buildMsvcBatch(request);
++        }
++        if (verbose && onOutput) onOutput("Executing: " + buildCompileCommand(kind, request));
++        code = runCommand("cmd /c \"" + batchFile + "\" 2>&1", onOutput);
++        std::filesystem::remove(batchFile, ec);
++    }
++    else {
++        const std::string command = buildCompileCommand(kind, request);
++        if (verbose && onOutput) onOutput("Executing: " + command);
++        code = runCommand(command + " 2>&1", onOutput);
++    }
++
++    return code == 0 && std::filesystem::exists(request.exeFile);
++}
++
++int CompilerBackend::run(const std::string& exeFile,
++    const std::function<void(const std::string&)>& onOutput) {
++    return runCommand(quoteArg(exeFile) + " 2>&1", onOutput);
++}
+diff --git a/PyCpp/src/lexer.cpp b/PyCpp/src/lexer.cpp
+index 2f2151a..ec284c6 100644
+--- a/PyCpp/src/lexer.cpp
++++ b/PyCpp/src/lexer.cpp
+@@ -507,37 +507,52 @@ std::vector<Token> Lexer::tokenize() {
+     std::vector<int> indent_stack = { 0 }; // Track indentation levels
+     bool at_line_start = true;
+     int current_indent = 0;
++    int bracket_depth = 0; // Inside (), [] or {} indentation is not significant
+ 
+     while (position < source.length()) {
+         // Handle line starts and indentation
+         if (at_line_start) {
+-            skipWhitespace(); // This only skips spaces/tabs, not newlines
+-
+-            // Check if we're at a newline (empty line)
+-            if (peek() == '\n') {
+-                tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
+-                advance();
+-                continue;
+-            }
+-
+-            // Calculate current indentation level
++            // Measure the indentation BEFORE any whitespace is skipped. (Calling
++            // skipWhitespace() first consumed the leading spaces, so every line
++            // measured as indent 0 and no INDENT/DEDENT token was ever produced.)
+             current_indent = 0;
+-            size_t save_pos = position;
+-            while (position < source.length() && (source[position] == ' ' || source[position] == '\t')) {
++            while (position < source.length() &&
++                (source[position] == ' ' || source[position] == '\t' || source[position] == '\r')) {
+                 if (source[position] == ' ') {
+                     current_indent++;
+                 }
+                 else if (source[position] == '\t') {
+                     current_indent += 4; // Treat tabs as 4 spaces
+                 }
++                // '\r' (CRLF files) is consumed but does not count as indentation
+                 advance();
+             }
+ 
+-            // Skip empty lines (indentation only)
+-            if (peek() == '\n' || peek() == '#') {
+-                if (peek() == '#') {
+-                    skipComment();
++            // Blank line: emit a NEWLINE and stay at line start
++            // (inside brackets lines are joined, so no NEWLINE is produced)
++            if (peek() == '\n') {
++                if (bracket_depth == 0) {
++                    tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
+                 }
++                advance();
++                continue;
++            }
++
++            // Comment-only line: indentation is irrelevant, the trailing newline
++            // is emitted as a blank line on the next iteration
++            if (peek() == '#') {
++                skipComment();
++                continue;
++            }
++
++            // Reached end of input after whitespace only
++            if (peek() == '\0') {
++                break;
++            }
++
++            // Inside brackets a continuation line must not open or close a block
++            if (bracket_depth > 0) {
++                at_line_start = false;
+                 continue;
+             }
+ 
+@@ -590,9 +605,27 @@ std::vector<Token> Lexer::tokenize() {
+         }
+         else if (std::ispunct(c)) {
+             tokens.push_back(readOperator());
++            switch (tokens.back().type) {
++            case TokenType::LPAREN:
++            case TokenType::LBRACKET:
++            case TokenType::LBRACE:
++                bracket_depth++;
++                break;
++            case TokenType::RPAREN:
++            case TokenType::RBRACKET:
++            case TokenType::RBRACE:
++                if (bracket_depth > 0) bracket_depth--;
++                break;
++            default:
++                break;
++            }
+         }
+         else if (c == '\n') {
+-            tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
++            // A newline inside (), [] or {} continues the expression (implicit
++            // line joining), so it is not a statement terminator.
++            if (bracket_depth == 0) {
++                tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
++            }
+             advance();
+             at_line_start = true; // Next token will be at line start
+         }
+diff --git a/PyCpp/src/main.cpp b/PyCpp/src/main.cpp
+index 6d11f07..96e1fa7 100644
+--- a/PyCpp/src/main.cpp
++++ b/PyCpp/src/main.cpp
+@@ -26,6 +26,7 @@
+ #include "../include/code_generator.h"
+ #include "../include/header_generator.h"
+ #include "../include/import_resolver.h"
++#include "../include/compiler_backend.h"
+ 
+ // Terminal output formatting
+ class TerminalFormatter {
+@@ -249,6 +250,8 @@ void printUsage(const std::string& programName) {
+     std::cout << "  --keep-temp      Keep temporary compilation files\n";
+     std::cout << "  --no-compile     Only generate .h and .cpp files, don't compile\n";
+     std::cout << "  --single-file    Compile only the specified file (no auto-deps)\n";
++    std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, msvc or auto\n";
++    std::cout << "                   (default: auto = msvc on Windows, gcc elsewhere)\n";
+     std::cout << "  -I <path>        Add directory to import search path\n\n";
+     std::cout << "Examples:\n";
+     std::cout << "  " << programName << " program.pycpp                          # Multi-file compilation with auto-deps\n";
+@@ -258,102 +261,57 @@ void printUsage(const std::string& programName) {
+     std::cout << "  " << programName << " program.pycpp --no-compile            # Generate C++ only\n";
+     std::cout << "  " << programName << " program.pycpp --single-file           # Compile only one file\n";
+     std::cout << "  " << programName << " program.pycpp -I ./lib               # With custom import path\n";
++    std::cout << "  " << programName << " program.pycpp --compiler gcc          # Build with g++\n";
++    std::cout << "  " << programName << " program.pycpp --compiler msvc         # Build with Visual Studio (cl.exe)\n";
+ }
+ 
+-bool runCompilerWithVSBatch(const std::string& cppFile, const std::string& exeFile, const std::string& includeDir, bool verbose) {
+-    std::string batchContent =
+-        "@echo off\n"
+-        "echo Setting up Visual Studio environment...\n"
+-        "call \"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul 2>&1\n"
+-        "if %errorlevel% neq 0 (\n"
+-        "  echo Failed to set up Visual Studio environment\n"
+-        "  exit /b 1\n"
+-        ")\n"
+-        "echo Compiling " + cppFile + "...\n"
+-        "cl /EHsc /std:c++17 \"" + cppFile + "\" /Fe\"" + exeFile + "\" /I\"" + includeDir + "\" /nologo\n"
+-        "if %errorlevel% neq 0 exit /b 1\n"
+-        "for /f \"tokens=*\" %%i in ('dir /b \"*.cpp\" 2^>nul') do echo    %%i\n"
+-        "echo.\n"
+-        "echo Running " + exeFile + "...\n"
+-        "echo.\n"
+-        "\"" + exeFile + "\"\n"
+-        "set EXIT_CODE=%errorlevel%\n"
+-        "echo.\n"
+-        "echo PROGRAM_EXIT_CODE:%EXIT_CODE%\n";
+-
+-    std::string batchFile = includeDir + "\\compile_vs.bat";
+-    std::ofstream batch(batchFile);
+-    if (!batch) {
+-        TerminalFormatter::printError("Could not create batch file");
++// Compile the generated C++ with the selected compiler, then run the result.
++// Returns true when the program was built and started.
++bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles,
++    const std::string& exeFile, const std::string& includeDir, bool verbose) {
++    std::string reason;
++    if (!CompilerBackend::isAvailable(compiler, reason)) {
++        TerminalFormatter::printError(reason);
+         return false;
+     }
+-    batch << batchContent;
+-    batch.close();
+ 
+-    if (verbose) {
+-        TerminalFormatter::printInfo("Created batch file: " + batchFile);
+-    }
++    CompileRequest request;
++    request.cppFiles = cppFiles;
++    request.exeFile = exeFile;
++    request.includeDir = includeDir;
+ 
+-    std::string command = "cmd /c \"" + batchFile + "\"";
+-    if (verbose) {
+-        TerminalFormatter::printInfo("Executing: cmd /c " + batchFile);
++    TerminalFormatter::printCompile("Compiling with " + CompilerBackend::displayName(compiler) + "...");
++    for (const auto& file : cppFiles) {
++        TerminalFormatter::printFilename(std::filesystem::path(file).filename().string());
+     }
+ 
+-    FILE* pipe = popen(command.c_str(), "r");
+-    if (!pipe) {
+-        TerminalFormatter::printError("Could not start compiler process");
++    bool built = CompilerBackend::compile(compiler, request, verbose, [](const std::string& line) {
++        if (!line.empty()) TerminalFormatter::printCompilerOutput(line + "\n");
++    });
++    cleanupStrayObjectFiles(verbose);
++
++    if (!built) {
++        TerminalFormatter::printError("Compilation failed");
+         return false;
+     }
+ 
+-    char buffer[256];
+-    bool compilationSuccess = false;
+-    bool programRan = false;
+-
+-    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+-        std::string line(buffer);
+-        if (!line.empty() && line[line.length() - 1] == '\n') {
+-            line.erase(line.length() - 1);
+-        }
+-
+-        // Filter and format output exactly as requested
+-        if (line.find("Setting up") != std::string::npos) {
+-            TerminalFormatter::printSettingUp();
+-        }
+-        else if (line.find("Compiling") != std::string::npos) {
+-            TerminalFormatter::printCompiling(cppFile);
+-        }
+-        else if (line.find(".cpp") != std::string::npos && line.length() < 50) {
+-            // This is the filename output from compiler
+-            TerminalFormatter::printFilename(line);
+-        }
+-        else if (line.find("Running") != std::string::npos) {
+-            TerminalFormatter::printRunning(exeFile);
+-            std::cout << std::endl; // Add the blank line before program output
+-        }
+-        else if (line.find("PROGRAM_EXIT_CODE:") != std::string::npos) {
+-            programRan = true;
+-            compilationSuccess = true;
+-            TerminalFormatter::printExitCode(std::stoi(line.substr(18)));
+-        }
+-        else if (!line.empty() && line != "." && line.find("Setting up") == std::string::npos &&
+-            line.find("Compiling") == std::string::npos && line.find("Running") == std::string::npos) {
+-            // This is actual program output - indent it
+-            TerminalFormatter::printProgramOutputLine(line);
+-        }
++    TerminalFormatter::printRunning(exeFile);
++    std::cout << std::endl;
++    int exitCode = CompilerBackend::run(exeFile, [](const std::string& line) {
++        TerminalFormatter::printProgramOutputLine(line);
++    });
++    if (exitCode < 0) {
++        TerminalFormatter::printError("Could not start the compiled program");
++        return false;
+     }
+-
+-    int result = pclose(pipe);
+-
+-    // Clean up batch file and stray object files
+-    std::remove(batchFile.c_str());
+-    cleanupStrayObjectFiles(verbose);
+-
+-    return compilationSuccess && programRan;
++    TerminalFormatter::printExitCode(exitCode);
++    return true;
+ }
+ 
+ // Multi-file compilation with automatic dependency resolution (DEFAULT)
+ bool compileMultiFile(const std::string& inputFile, const std::string& outputBase,
+-    const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile) {
++    const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile,
++    CompilerKind compiler) {
+     try {
+         std::filesystem::path inputPath(inputFile);
+         std::filesystem::path inputDir = inputPath.parent_path();
+@@ -399,37 +357,21 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
+         }
+ 
+         // Compile all generated .cpp files together
+-        std::string cppFiles;
++        std::vector<std::string> cppFiles;
+         for (const auto& file : all_files) {
+             std::filesystem::path filePath(file);
+             std::string moduleName = filePath.stem().string();
+-            cppFiles += "\"" + (tempDir / (moduleName + ".cpp")).string() + "\" ";
++            cppFiles.push_back((tempDir / (moduleName + ".cpp")).string());
+         }
+ 
+-        std::string exeFile = (tempDir / (outputBase + ".exe")).string();
+-        std::string compileCommand = "cl /EHsc /std:c++17 " + cppFiles + " /Fe\"" + exeFile + "\" /I\"" + tempDir.string() + "\" /nologo";
++        // The executable lives in the temp directory, named after the output base
++        const std::string outputName = std::filesystem::path(outputBase).filename().string();
++        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
+ 
+-        if (verbose) {
+-            TerminalFormatter::printCompile("Compiling with command: " + compileCommand);
+-        }
+-
+-        bool compilationSuccess = runCompilerWithVSBatch((tempDir / (outputBase + ".cpp")).string(), exeFile, tempDir.string(), verbose);
+-
+-        if (!compilationSuccess) {
+-            TerminalFormatter::printCompile("Compiling generated C++ code...");
+-            int compileResult = system(compileCommand.c_str());
+-            compilationSuccess = (compileResult == 0 && std::filesystem::exists(exeFile));
+-
+-            if (compilationSuccess) {
+-                TerminalFormatter::printSuccess("Executable created: " + exeFile);
+-                TerminalFormatter::printRun("Running program...");
+-                int runResult = system(("\"" + exeFile + "\"").c_str());
+-                if (verbose) TerminalFormatter::printInfo("Program exited with code: " + std::to_string(runResult));
+-            }
+-        }
++        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose);
+ 
+         if (!compilationSuccess) {
+-            TerminalFormatter::printWarning("Could not automatically compile the generated C++ code");
++            TerminalFormatter::printWarning("Could not compile the generated C++ code");
+             TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
+             return false;
+         }
+@@ -473,7 +415,8 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
+ }
+ 
+ // Single-file compilation (optional with --single-file flag)
+-bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp) {
++bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp,
++    CompilerKind compiler) {
+     try {
+         std::filesystem::path inputPath(inputFile);
+         std::filesystem::path inputDir = inputPath.parent_path();
+@@ -510,30 +453,18 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
+         SemanticAnalyzer analyzer;
+         analyzer.analyze(ast);
+ 
+-        IncludeManager include_manager;
+-        generateHeaderAndImplementation(ast, (tempDir / outputBase).string(), include_manager);
++        const std::string outputName = std::filesystem::path(outputBase).filename().string();
+ 
+-        std::string cppFile = (tempDir / (outputBase + ".cpp")).string();
+-        std::string exeFile = (tempDir / (outputBase + ".exe")).string();
++        IncludeManager include_manager;
++        generateHeaderAndImplementation(ast, (tempDir / outputName).string(), include_manager);
+ 
+-        bool compilationSuccess = runCompilerWithVSBatch(cppFile, exeFile, tempDir.string(), verbose);
++        std::string cppFile = (tempDir / (outputName + ".cpp")).string();
++        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
+ 
+-        if (!compilationSuccess) {
+-            TerminalFormatter::printCompile("Compiling generated C++ code...");
+-            std::string compileCommand = "cl /EHsc /std:c++17 \"" + cppFile + "\" /Fe\"" + exeFile + "\" /I\"" + tempDir.string() + "\" /nologo";
+-            int compileResult = system(compileCommand.c_str());
+-
+-            if (compileResult == 0 && std::filesystem::exists(exeFile)) {
+-                TerminalFormatter::printSuccess("Executable created: " + exeFile);
+-                TerminalFormatter::printRun("Running program...");
+-                int runResult = system(("\"" + exeFile + "\"").c_str());
+-                if (verbose) TerminalFormatter::printInfo("Program exited with code: " + std::to_string(runResult));
+-                compilationSuccess = true;
+-            }
+-        }
++        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose);
+ 
+         if (!compilationSuccess) {
+-            TerminalFormatter::printWarning("Could not automatically compile the generated C++ code");
++            TerminalFormatter::printWarning("Could not compile the generated C++ code");
+             TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
+             return false;
+         }
+@@ -541,7 +472,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
+         if (!keepTemp) {
+             try {
+                 std::filesystem::remove(cppFile);
+-                std::filesystem::remove(tempDir / (outputBase + ".h"));
++                std::filesystem::remove(tempDir / (outputName + ".h"));
+                 std::filesystem::remove(exeFile);
+ 
+                 // Clean up .obj files
+@@ -569,7 +500,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
+     }
+ }
+ 
+-bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths) {
++bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler) {
+     if (noCompile) {
+         try {
+             std::ifstream file(inputFile);
+@@ -610,11 +541,11 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
+     }
+     else if (singleFile) {
+         // Use single-file compilation only when explicitly requested
+-        return compileSingleFile(inputFile, outputBase, verbose, keepTemp);
++        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler);
+     }
+     else {
+         // DEFAULT: Use multi-file compilation with auto-dependency resolution
+-        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile);
++        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler);
+     }
+ }
+ 
+@@ -630,6 +561,7 @@ int main(int argc, char* argv[]) {
+     bool keepTemp = false;
+     bool noCompile = false;
+     bool singleFile = false;  // Default is multi-file compilation
++    CompilerKind requestedCompiler = CompilerKind::Auto;
+     std::vector<std::string> importPaths;
+ 
+     for (int i = 1; i < argc; ++i) {
+@@ -650,6 +582,23 @@ int main(int argc, char* argv[]) {
+         else if (arg == "--single-file") {
+             singleFile = true;
+         }
++        else if (arg == "--compiler" || arg.rfind("--compiler=", 0) == 0) {
++            std::string value;
++            if (arg == "--compiler") {
++                if (i + 1 < argc) value = argv[++i];
++                else {
++                    TerminalFormatter::printError("--compiler option requires a value (gcc, msvc or auto)");
++                    return 1;
++                }
++            }
++            else {
++                value = arg.substr(std::string("--compiler=").size());
++            }
++            if (!CompilerBackend::parseKind(value, requestedCompiler)) {
++                TerminalFormatter::printError("Unknown compiler '" + value + "' (expected gcc, msvc or auto)");
++                return 1;
++            }
++        }
+         else if (arg == "-I") {
+             if (i + 1 < argc) {
+                 importPaths.push_back(argv[++i]);
+@@ -706,6 +655,11 @@ int main(int argc, char* argv[]) {
+         }
+     }
+ 
+-    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths);
++    const CompilerKind compiler = CompilerBackend::resolve(requestedCompiler);
++    if (verbose) {
++        TerminalFormatter::printInfo("Compiler: " + CompilerBackend::displayName(compiler));
++    }
++
++    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler);
+     return success ? 0 : 1;
+ }
+\ No newline at end of file
+diff --git a/PyCpp/src/pycpp_parser.cpp b/PyCpp/src/pycpp_parser.cpp
+index 85fdbc5..8861ace 100644
+--- a/PyCpp/src/pycpp_parser.cpp
++++ b/PyCpp/src/pycpp_parser.cpp
+@@ -485,7 +485,17 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
+     func->line = tokens[position - 1].line;
+     func->column = tokens[position - 1].column;
+ 
+-    func->name = consume(TokenType::IDENTIFIER, "Expected function name").value;
++    // Special methods (__init__, __str__, ...) are lexed as dedicated keyword
++    // tokens rather than IDENTIFIER, but they are valid function names after 'def'.
++    if (check(TokenType::IDENTIFIER) ||
++        (peek().value.size() > 4 && peek().value.compare(0, 2, "__") == 0 &&
++         peek().value.compare(peek().value.size() - 2, 2, "__") == 0)) {
++        func->name = advance().value;
++    }
++    else {
++        throw std::runtime_error("Expected function name at line " +
++            std::to_string(peek().line) + ":" + std::to_string(peek().column));
++    }
+     std::cout << "Parsing function: " << func->name << std::endl;
+ 
+     consume(TokenType::LPAREN, "Expected '(' after function name");
+@@ -602,8 +612,14 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+         consume(TokenType::NEWLINE, "Expected newline after class definition");
+         std::cout << "After newline, position: " << position << ", token: '" << peek().value << "'" << std::endl;
+ 
+-        // FIX: Track starting position for better end detection
+-        size_t class_body_start = position;
++        // The class body is an INDENT ... DEDENT block
++        handleIndentation();
++        if (!check(TokenType::INDENT)) {
++            throw std::runtime_error("Expected an indented class body at line " +
++                std::to_string(peek().line) + ":" + std::to_string(peek().column));
++        }
++        advance(); // consume INDENT
++
+         int member_count = 0;
+ 
+         while (!atEnd()) {
+@@ -612,65 +628,10 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+ 
+             handleIndentation();
+ 
+-            // FIX: Enhanced end-of-class detection
+-            // Check if we've reached a top-level function (not a method)
+-            if (check(TokenType::DEF)) {
+-                size_t save_pos = position;
+-                bool is_standalone_function = false;
+-
+-                try {
+-                    // Look ahead to see if this is a method or standalone function
+-                    advance(); // consume 'def'
+-
+-                    if (check(TokenType::IDENTIFIER)) {
+-                        std::string func_name = peek().value;
+-                        std::cout << "Found function definition: " << func_name << std::endl;
+-
+-                        // Check if it has 'self' parameter (method) or not (standalone function)
+-                        if (checkNext(TokenType::LPAREN)) {
+-                            advance(); // consume function name
+-                            advance(); // consume '('
+-
+-                            // Check first parameter
+-                            if (check(TokenType::IDENTIFIER)) {
+-                                std::string first_param = peek().value;
+-                                std::cout << "First parameter: " << first_param << std::endl;
+-
+-                                if (first_param != "self") {
+-                                    // Function doesn't have 'self' as first parameter - likely standalone
+-                                    is_standalone_function = true;
+-                                    std::cout << "Detected standalone function: " << func_name
+-                                        << " (no 'self' parameter)" << std::endl;
+-                                }
+-                            }
+-                            else if (check(TokenType::RPAREN)) {
+-                                // Function has no parameters - definitely standalone
+-                                is_standalone_function = true;
+-                                std::cout << "Detected standalone function: " << func_name
+-                                    << " (no parameters)" << std::endl;
+-                            }
+-                        }
+-                    }
+-                }
+-                catch (const std::exception& e) {
+-                    // If lookahead fails, assume it's a method for safety
+-                    std::cout << "Lookahead failed: " << e.what() << ", assuming method" << std::endl;
+-                }
+-
+-                position = save_pos; // Restore position
+-
+-                if (is_standalone_function) {
+-                    std::cout << "=== ENDING CLASS PARSING - Found standalone function ===" << std::endl;
+-                    break;
+-                }
+-            }
+-
+-            // FIX: Check for other top-level constructs that indicate end of class
+-            if ((check(TokenType::CLASS) || check(TokenType::STRUCT) ||
+-                check(TokenType::TEMPLATE) || check(TokenType::CONSTEXPR) ||
+-                check(TokenType::UNSAFE) || check(TokenType::IMPORT) ||
+-                check(TokenType::USE)) && position > class_body_start) {
+-                std::cout << "End of class detected (top-level construct): " << peek().value << std::endl;
++            // The matching DEDENT ends the class body
++            if (check(TokenType::DEDENT)) {
++                advance();
++                std::cout << "=== ENDING CLASS PARSING - dedent ===" << std::endl;
+                 break;
+             }
+ 
+@@ -680,9 +641,10 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+                 break;
+             }
+ 
+-            // Skip empty lines
+-            if (check(TokenType::NEWLINE)) {
+-                advance();
++            if (check(TokenType::INDENT)) {
++                std::cerr << "Error in class body at line " << peek().line
++                    << ": unexpected indentation" << std::endl;
++                skipIndentedRegion();
+                 continue;
+             }
+ 
+@@ -702,13 +664,13 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+                         else {
+                             std::cout << "Failed to parse method" << std::endl;
+                             position = method_start;
+-                            synchronize();
++                            synchronizeInBlock();
+                         }
+                     }
+                     catch (const std::runtime_error& e) {
+                         std::cerr << "Error parsing method at position " << position << ": " << e.what() << std::endl;
+                         position = method_start;
+-                        synchronize();
++                        synchronizeInBlock();
+                     }
+                 }
+                 else if (isClassAttributeDeclaration()) {
+@@ -720,7 +682,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+                     }
+                     else {
+                         std::cout << "Failed to parse class attribute" << std::endl;
+-                        synchronize();
++                        synchronizeInBlock();
+                     }
+                 }
+                 else {
+@@ -733,13 +695,13 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
+                     else {
+                         std::cout << "Unexpected token in class at position " << position
+                             << ": '" << peek().value << "' type: " << static_cast<int>(peek().type) << std::endl;
+-                        synchronize();
++                        synchronizeInBlock();
+                     }
+                 }
+             }
+             catch (const std::runtime_error& e) {
+                 std::cerr << "Error parsing class member at position " << position << ": " << e.what() << std::endl;
+-                synchronize();
++                synchronizeInBlock();
+             }
+ 
+             member_count++;
+@@ -884,18 +846,26 @@ std::unique_ptr<StructDef> PyCppParser::parseStructDef() {
+     // Struct name
+     struct_def->name = consume(TokenType::IDENTIFIER, "Expected struct name").value;
+ 
+-    // Struct body
++    // Struct body: an INDENT ... DEDENT block of typed fields
+     consume(TokenType::COLON, "Expected ':' before struct body");
+     consume(TokenType::NEWLINE, "Expected newline after struct definition");
+ 
+-    // Parse struct fields
++    handleIndentation();
++    if (!check(TokenType::INDENT)) {
++        throw std::runtime_error("Expected an indented struct body at line " +
++            std::to_string(peek().line) + ":" + std::to_string(peek().column));
++    }
++    advance(); // consume INDENT
++
+     while (!atEnd()) {
+         handleIndentation();
+ 
+-        // Check for end of struct
+-        if (check(TokenType::CLASS) || check(TokenType::DEF) ||
+-            check(TokenType::STRUCT) || check(TokenType::TEMPLATE) ||
+-            atEnd()) {
++        if (check(TokenType::DEDENT)) {
++            advance(); // end of struct body
++            break;
++        }
++
++        if (atEnd()) {
+             break;
+         }
+ 
+@@ -903,7 +873,9 @@ std::unique_ptr<StructDef> PyCppParser::parseStructDef() {
+             struct_def->fields.push_back(parseVarDecl());
+         }
+         else {
+-            break;
++            throw std::runtime_error("Expected a field declaration in struct '" +
++                struct_def->name + "' at line " + std::to_string(peek().line) +
++                ":" + std::to_string(peek().column));
+         }
+     }
+ 
+@@ -1391,62 +1363,47 @@ std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
+     return use_stmt;
+ }
+ 
+-// FIXED: Enhanced block parsing to properly detect end of function
++// Parse an indented block. The caller has already consumed the ':' and the NEWLINE
++// that follows it. A block starts at an INDENT token and ends at the matching
++// DEDENT token produced by the lexer, so nested blocks close at exactly the
++// indentation level they were written at.
+ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
+     std::vector<std::unique_ptr<Stmt>> statements;
+     std::cout << "Starting to parse block at position " << position << std::endl;
+ 
+-    size_t starting_position = position;
+-    int max_statements = 100; // Safety limit
+-    int statement_count = 0;
+-
+-    while (!atEnd() && statement_count < max_statements) {
+-        // Skip empty lines and handle indentation
+-        handleIndentation();
++    handleIndentation();
+ 
+-        // FIXED: Enhanced end-of-block detection
+-        // Check for top-level constructs that indicate end of current block
+-        if (position > starting_position) {
+-            Token current = peek();
+-
+-            // These tokens indicate we're back at top-level scope
+-            if (current.type == TokenType::CLASS ||
+-                current.type == TokenType::DEF ||
+-                current.type == TokenType::STRUCT ||
+-                current.type == TokenType::TEMPLATE ||
+-                current.type == TokenType::CONSTEXPR ||
+-                current.type == TokenType::UNSAFE ||
+-                current.type == TokenType::IMPORT ||
+-                current.type == TokenType::USE) {
+-
+-                std::cout << "End of block detected (top-level construct): " << current.value << std::endl;
+-                break;
+-            }
++    if (!check(TokenType::INDENT)) {
++        throw std::runtime_error("Expected an indented block at line " +
++            std::to_string(peek().line) + ":" + std::to_string(peek().column));
++    }
++    advance(); // consume INDENT
+ 
+-            // Also check for elif/else that belong to outer if statements
+-            if ((current.type == TokenType::ELIF || current.type == TokenType::ELSE) &&
+-                position > starting_position) {
+-                std::cout << "End of block detected (elif/else): " << current.value << std::endl;
+-                break;
+-            }
+-        }
++    while (!atEnd()) {
++        handleIndentation(); // skip blank lines
+ 
+-        // Skip if we're at a newline (empty line)
+-        if (check(TokenType::NEWLINE)) {
+-            advance();
+-            continue;
++        if (check(TokenType::DEDENT)) {
++            advance(); // consume the DEDENT that closes this block
++            std::cout << "End of block (dedent)" << std::endl;
++            break;
+         }
+ 
+-        // FIXED: Check if we've reached the end of file
+         if (atEnd()) {
+-            std::cout << "End of block detected (EOF)" << std::endl;
+             break;
+         }
+ 
++        if (check(TokenType::INDENT)) {
++            // A line indented deeper than the block it belongs to
++            std::cerr << "Error in block at line " << peek().line
++                << ": unexpected indentation" << std::endl;
++            skipIndentedRegion();
++            continue;
++        }
++
++        size_t before = position;
+         try {
+             if (auto stmt = parseStatement()) {
+                 statements.push_back(std::move(stmt));
+-                statement_count++;
+                 std::cout << "Added statement to block, now has " << statements.size() << " statements" << std::endl;
+             }
+             else {
+@@ -1456,13 +1413,12 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
+         }
+         catch (const std::runtime_error& e) {
+             std::cerr << "Error in block at position " << position << ": " << e.what() << std::endl;
+-            // Don't break immediately - try to synchronize and continue
+-            synchronize();
++            synchronizeInBlock();
++        }
+ 
+-            // If we haven't made progress after synchronization, break
+-            if (position >= tokens.size() || position == starting_position) {
+-                break;
+-            }
++        if (position == before) {
++            // No progress: skip the offending token so we cannot loop forever
++            advance();
+         }
+     }
+ 
+@@ -1470,6 +1426,40 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
+     return statements;
+ }
+ 
++// Skip an INDENT ... DEDENT region (including any regions nested inside it).
++void PyCppParser::skipIndentedRegion() {
++    if (!check(TokenType::INDENT)) return;
++    int depth = 0;
++    while (!atEnd()) {
++        if (check(TokenType::INDENT)) {
++            depth++;
++        }
++        else if (check(TokenType::DEDENT)) {
++            depth--;
++            if (depth == 0) {
++                advance();
++                return;
++            }
++        }
++        advance();
++    }
++}
++
++// Error recovery inside a block: skip to the end of the current line without
++// consuming INDENT/DEDENT tokens, so the block structure stays balanced. If the
++// failed statement opened a nested block, that whole block is skipped too.
++void PyCppParser::synchronizeInBlock() {
++    while (!atEnd() && !check(TokenType::NEWLINE) &&
++        !check(TokenType::INDENT) && !check(TokenType::DEDENT)) {
++        advance();
++    }
++    match(TokenType::NEWLINE);
++    handleIndentation();
++    if (check(TokenType::INDENT)) {
++        skipIndentedRegion();
++    }
++}
++
+ // ===== Expression Parsing =====
+ 
+ std::unique_ptr<Expr> PyCppParser::parseExpression() {

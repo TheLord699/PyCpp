@@ -26,6 +26,7 @@
 #include "../include/code_generator.h"
 #include "../include/header_generator.h"
 #include "../include/import_resolver.h"
+#include "../include/compiler_backend.h"
 
 // Terminal output formatting
 class TerminalFormatter {
@@ -249,6 +250,8 @@ void printUsage(const std::string& programName) {
     std::cout << "  --keep-temp      Keep temporary compilation files\n";
     std::cout << "  --no-compile     Only generate .h and .cpp files, don't compile\n";
     std::cout << "  --single-file    Compile only the specified file (no auto-deps)\n";
+    std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, msvc or auto\n";
+    std::cout << "                   (default: auto = msvc on Windows, gcc elsewhere)\n";
     std::cout << "  -I <path>        Add directory to import search path\n\n";
     std::cout << "Examples:\n";
     std::cout << "  " << programName << " program.pycpp                          # Multi-file compilation with auto-deps\n";
@@ -258,102 +261,57 @@ void printUsage(const std::string& programName) {
     std::cout << "  " << programName << " program.pycpp --no-compile            # Generate C++ only\n";
     std::cout << "  " << programName << " program.pycpp --single-file           # Compile only one file\n";
     std::cout << "  " << programName << " program.pycpp -I ./lib               # With custom import path\n";
+    std::cout << "  " << programName << " program.pycpp --compiler gcc          # Build with g++\n";
+    std::cout << "  " << programName << " program.pycpp --compiler msvc         # Build with Visual Studio (cl.exe)\n";
 }
 
-bool runCompilerWithVSBatch(const std::string& cppFile, const std::string& exeFile, const std::string& includeDir, bool verbose) {
-    std::string batchContent =
-        "@echo off\n"
-        "echo Setting up Visual Studio environment...\n"
-        "call \"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul 2>&1\n"
-        "if %errorlevel% neq 0 (\n"
-        "  echo Failed to set up Visual Studio environment\n"
-        "  exit /b 1\n"
-        ")\n"
-        "echo Compiling " + cppFile + "...\n"
-        "cl /EHsc /std:c++17 \"" + cppFile + "\" /Fe\"" + exeFile + "\" /I\"" + includeDir + "\" /nologo\n"
-        "if %errorlevel% neq 0 exit /b 1\n"
-        "for /f \"tokens=*\" %%i in ('dir /b \"*.cpp\" 2^>nul') do echo    %%i\n"
-        "echo.\n"
-        "echo Running " + exeFile + "...\n"
-        "echo.\n"
-        "\"" + exeFile + "\"\n"
-        "set EXIT_CODE=%errorlevel%\n"
-        "echo.\n"
-        "echo PROGRAM_EXIT_CODE:%EXIT_CODE%\n";
-
-    std::string batchFile = includeDir + "\\compile_vs.bat";
-    std::ofstream batch(batchFile);
-    if (!batch) {
-        TerminalFormatter::printError("Could not create batch file");
-        return false;
-    }
-    batch << batchContent;
-    batch.close();
-
-    if (verbose) {
-        TerminalFormatter::printInfo("Created batch file: " + batchFile);
-    }
-
-    std::string command = "cmd /c \"" + batchFile + "\"";
-    if (verbose) {
-        TerminalFormatter::printInfo("Executing: cmd /c " + batchFile);
-    }
-
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        TerminalFormatter::printError("Could not start compiler process");
+// Compile the generated C++ with the selected compiler, then run the result.
+// Returns true when the program was built and started.
+bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles,
+    const std::string& exeFile, const std::string& includeDir, bool verbose) {
+    std::string reason;
+    if (!CompilerBackend::isAvailable(compiler, reason)) {
+        TerminalFormatter::printError(reason);
         return false;
     }
 
-    char buffer[256];
-    bool compilationSuccess = false;
-    bool programRan = false;
+    CompileRequest request;
+    request.cppFiles = cppFiles;
+    request.exeFile = exeFile;
+    request.includeDir = includeDir;
 
-    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-        std::string line(buffer);
-        if (!line.empty() && line[line.length() - 1] == '\n') {
-            line.erase(line.length() - 1);
-        }
-
-        // Filter and format output exactly as requested
-        if (line.find("Setting up") != std::string::npos) {
-            TerminalFormatter::printSettingUp();
-        }
-        else if (line.find("Compiling") != std::string::npos) {
-            TerminalFormatter::printCompiling(cppFile);
-        }
-        else if (line.find(".cpp") != std::string::npos && line.length() < 50) {
-            // This is the filename output from compiler
-            TerminalFormatter::printFilename(line);
-        }
-        else if (line.find("Running") != std::string::npos) {
-            TerminalFormatter::printRunning(exeFile);
-            std::cout << std::endl; // Add the blank line before program output
-        }
-        else if (line.find("PROGRAM_EXIT_CODE:") != std::string::npos) {
-            programRan = true;
-            compilationSuccess = true;
-            TerminalFormatter::printExitCode(std::stoi(line.substr(18)));
-        }
-        else if (!line.empty() && line != "." && line.find("Setting up") == std::string::npos &&
-            line.find("Compiling") == std::string::npos && line.find("Running") == std::string::npos) {
-            // This is actual program output - indent it
-            TerminalFormatter::printProgramOutputLine(line);
-        }
+    TerminalFormatter::printCompile("Compiling with " + CompilerBackend::displayName(compiler) + "...");
+    for (const auto& file : cppFiles) {
+        TerminalFormatter::printFilename(std::filesystem::path(file).filename().string());
     }
 
-    int result = pclose(pipe);
-
-    // Clean up batch file and stray object files
-    std::remove(batchFile.c_str());
+    bool built = CompilerBackend::compile(compiler, request, verbose, [](const std::string& line) {
+        if (!line.empty()) TerminalFormatter::printCompilerOutput(line + "\n");
+    });
     cleanupStrayObjectFiles(verbose);
 
-    return compilationSuccess && programRan;
+    if (!built) {
+        TerminalFormatter::printError("Compilation failed");
+        return false;
+    }
+
+    TerminalFormatter::printRunning(exeFile);
+    std::cout << std::endl;
+    int exitCode = CompilerBackend::run(exeFile, [](const std::string& line) {
+        TerminalFormatter::printProgramOutputLine(line);
+    });
+    if (exitCode < 0) {
+        TerminalFormatter::printError("Could not start the compiled program");
+        return false;
+    }
+    TerminalFormatter::printExitCode(exitCode);
+    return true;
 }
 
 // Multi-file compilation with automatic dependency resolution (DEFAULT)
 bool compileMultiFile(const std::string& inputFile, const std::string& outputBase,
-    const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile) {
+    const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile,
+    CompilerKind compiler) {
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -399,37 +357,21 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         }
 
         // Compile all generated .cpp files together
-        std::string cppFiles;
+        std::vector<std::string> cppFiles;
         for (const auto& file : all_files) {
             std::filesystem::path filePath(file);
             std::string moduleName = filePath.stem().string();
-            cppFiles += "\"" + (tempDir / (moduleName + ".cpp")).string() + "\" ";
+            cppFiles.push_back((tempDir / (moduleName + ".cpp")).string());
         }
 
-        std::string exeFile = (tempDir / (outputBase + ".exe")).string();
-        std::string compileCommand = "cl /EHsc /std:c++17 " + cppFiles + " /Fe\"" + exeFile + "\" /I\"" + tempDir.string() + "\" /nologo";
+        // The executable lives in the temp directory, named after the output base
+        const std::string outputName = std::filesystem::path(outputBase).filename().string();
+        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        if (verbose) {
-            TerminalFormatter::printCompile("Compiling with command: " + compileCommand);
-        }
-
-        bool compilationSuccess = runCompilerWithVSBatch((tempDir / (outputBase + ".cpp")).string(), exeFile, tempDir.string(), verbose);
+        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose);
 
         if (!compilationSuccess) {
-            TerminalFormatter::printCompile("Compiling generated C++ code...");
-            int compileResult = system(compileCommand.c_str());
-            compilationSuccess = (compileResult == 0 && std::filesystem::exists(exeFile));
-
-            if (compilationSuccess) {
-                TerminalFormatter::printSuccess("Executable created: " + exeFile);
-                TerminalFormatter::printRun("Running program...");
-                int runResult = system(("\"" + exeFile + "\"").c_str());
-                if (verbose) TerminalFormatter::printInfo("Program exited with code: " + std::to_string(runResult));
-            }
-        }
-
-        if (!compilationSuccess) {
-            TerminalFormatter::printWarning("Could not automatically compile the generated C++ code");
+            TerminalFormatter::printWarning("Could not compile the generated C++ code");
             TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
             return false;
         }
@@ -473,7 +415,8 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
 }
 
 // Single-file compilation (optional with --single-file flag)
-bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp) {
+bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp,
+    CompilerKind compiler) {
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -510,30 +453,18 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         SemanticAnalyzer analyzer;
         analyzer.analyze(ast);
 
+        const std::string outputName = std::filesystem::path(outputBase).filename().string();
+
         IncludeManager include_manager;
-        generateHeaderAndImplementation(ast, (tempDir / outputBase).string(), include_manager);
+        generateHeaderAndImplementation(ast, (tempDir / outputName).string(), include_manager);
 
-        std::string cppFile = (tempDir / (outputBase + ".cpp")).string();
-        std::string exeFile = (tempDir / (outputBase + ".exe")).string();
+        std::string cppFile = (tempDir / (outputName + ".cpp")).string();
+        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        bool compilationSuccess = runCompilerWithVSBatch(cppFile, exeFile, tempDir.string(), verbose);
-
-        if (!compilationSuccess) {
-            TerminalFormatter::printCompile("Compiling generated C++ code...");
-            std::string compileCommand = "cl /EHsc /std:c++17 \"" + cppFile + "\" /Fe\"" + exeFile + "\" /I\"" + tempDir.string() + "\" /nologo";
-            int compileResult = system(compileCommand.c_str());
-
-            if (compileResult == 0 && std::filesystem::exists(exeFile)) {
-                TerminalFormatter::printSuccess("Executable created: " + exeFile);
-                TerminalFormatter::printRun("Running program...");
-                int runResult = system(("\"" + exeFile + "\"").c_str());
-                if (verbose) TerminalFormatter::printInfo("Program exited with code: " + std::to_string(runResult));
-                compilationSuccess = true;
-            }
-        }
+        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose);
 
         if (!compilationSuccess) {
-            TerminalFormatter::printWarning("Could not automatically compile the generated C++ code");
+            TerminalFormatter::printWarning("Could not compile the generated C++ code");
             TerminalFormatter::printInfo("Generated files are in: " + tempDir.string());
             return false;
         }
@@ -541,7 +472,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         if (!keepTemp) {
             try {
                 std::filesystem::remove(cppFile);
-                std::filesystem::remove(tempDir / (outputBase + ".h"));
+                std::filesystem::remove(tempDir / (outputName + ".h"));
                 std::filesystem::remove(exeFile);
 
                 // Clean up .obj files
@@ -569,7 +500,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
     }
 }
 
-bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths) {
+bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler) {
     if (noCompile) {
         try {
             std::ifstream file(inputFile);
@@ -610,11 +541,11 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
     }
     else if (singleFile) {
         // Use single-file compilation only when explicitly requested
-        return compileSingleFile(inputFile, outputBase, verbose, keepTemp);
+        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler);
     }
     else {
         // DEFAULT: Use multi-file compilation with auto-dependency resolution
-        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile);
+        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler);
     }
 }
 
@@ -630,6 +561,7 @@ int main(int argc, char* argv[]) {
     bool keepTemp = false;
     bool noCompile = false;
     bool singleFile = false;  // Default is multi-file compilation
+    CompilerKind requestedCompiler = CompilerKind::Auto;
     std::vector<std::string> importPaths;
 
     for (int i = 1; i < argc; ++i) {
@@ -649,6 +581,23 @@ int main(int argc, char* argv[]) {
         }
         else if (arg == "--single-file") {
             singleFile = true;
+        }
+        else if (arg == "--compiler" || arg.rfind("--compiler=", 0) == 0) {
+            std::string value;
+            if (arg == "--compiler") {
+                if (i + 1 < argc) value = argv[++i];
+                else {
+                    TerminalFormatter::printError("--compiler option requires a value (gcc, msvc or auto)");
+                    return 1;
+                }
+            }
+            else {
+                value = arg.substr(std::string("--compiler=").size());
+            }
+            if (!CompilerBackend::parseKind(value, requestedCompiler)) {
+                TerminalFormatter::printError("Unknown compiler '" + value + "' (expected gcc, msvc or auto)");
+                return 1;
+            }
         }
         else if (arg == "-I") {
             if (i + 1 < argc) {
@@ -706,6 +655,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths);
+    const CompilerKind compiler = CompilerBackend::resolve(requestedCompiler);
+    if (verbose) {
+        TerminalFormatter::printInfo("Compiler: " + CompilerBackend::displayName(compiler));
+    }
+
+    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler);
     return success ? 0 : 1;
 }

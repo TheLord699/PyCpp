@@ -507,37 +507,52 @@ std::vector<Token> Lexer::tokenize() {
     std::vector<int> indent_stack = { 0 }; // Track indentation levels
     bool at_line_start = true;
     int current_indent = 0;
+    int bracket_depth = 0; // Inside (), [] or {} indentation is not significant
 
     while (position < source.length()) {
         // Handle line starts and indentation
         if (at_line_start) {
-            skipWhitespace(); // This only skips spaces/tabs, not newlines
-
-            // Check if we're at a newline (empty line)
-            if (peek() == '\n') {
-                tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
-                advance();
-                continue;
-            }
-
-            // Calculate current indentation level
+            // Measure the indentation BEFORE any whitespace is skipped. (Calling
+            // skipWhitespace() first consumed the leading spaces, so every line
+            // measured as indent 0 and no INDENT/DEDENT token was ever produced.)
             current_indent = 0;
-            size_t save_pos = position;
-            while (position < source.length() && (source[position] == ' ' || source[position] == '\t')) {
+            while (position < source.length() &&
+                (source[position] == ' ' || source[position] == '\t' || source[position] == '\r')) {
                 if (source[position] == ' ') {
                     current_indent++;
                 }
                 else if (source[position] == '\t') {
                     current_indent += 4; // Treat tabs as 4 spaces
                 }
+                // '\r' (CRLF files) is consumed but does not count as indentation
                 advance();
             }
 
-            // Skip empty lines (indentation only)
-            if (peek() == '\n' || peek() == '#') {
-                if (peek() == '#') {
-                    skipComment();
+            // Blank line: emit a NEWLINE and stay at line start
+            // (inside brackets lines are joined, so no NEWLINE is produced)
+            if (peek() == '\n') {
+                if (bracket_depth == 0) {
+                    tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
                 }
+                advance();
+                continue;
+            }
+
+            // Comment-only line: indentation is irrelevant, the trailing newline
+            // is emitted as a blank line on the next iteration
+            if (peek() == '#') {
+                skipComment();
+                continue;
+            }
+
+            // Reached end of input after whitespace only
+            if (peek() == '\0') {
+                break;
+            }
+
+            // Inside brackets a continuation line must not open or close a block
+            if (bracket_depth > 0) {
+                at_line_start = false;
                 continue;
             }
 
@@ -590,9 +605,27 @@ std::vector<Token> Lexer::tokenize() {
         }
         else if (std::ispunct(c)) {
             tokens.push_back(readOperator());
+            switch (tokens.back().type) {
+            case TokenType::LPAREN:
+            case TokenType::LBRACKET:
+            case TokenType::LBRACE:
+                bracket_depth++;
+                break;
+            case TokenType::RPAREN:
+            case TokenType::RBRACKET:
+            case TokenType::RBRACE:
+                if (bracket_depth > 0) bracket_depth--;
+                break;
+            default:
+                break;
+            }
         }
         else if (c == '\n') {
-            tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
+            // A newline inside (), [] or {} continues the expression (implicit
+            // line joining), so it is not a statement terminator.
+            if (bracket_depth == 0) {
+                tokens.emplace_back(TokenType::NEWLINE, "\n", line, column);
+            }
             advance();
             at_line_start = true; // Next token will be at line start
         }

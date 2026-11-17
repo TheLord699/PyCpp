@@ -5,6 +5,8 @@
 #include "include_manager.h"
 #include <sstream>
 #include <memory>
+#include <set>
+#include <string>
 
 class CodeGenerator : public ASTVisitor {
 private:
@@ -12,6 +14,7 @@ private:
     int indent_level;
     FunctionDef* current_function;
     ClassDef* current_class;
+    std::set<std::string> imported_modules; // identifiers that name an imported module
 
     void indent();
     void dedent();

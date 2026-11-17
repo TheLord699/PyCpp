@@ -485,7 +485,17 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     func->line = tokens[position - 1].line;
     func->column = tokens[position - 1].column;
 
-    func->name = consume(TokenType::IDENTIFIER, "Expected function name").value;
+    // Special methods (__init__, __str__, ...) are lexed as dedicated keyword
+    // tokens rather than IDENTIFIER, but they are valid function names after 'def'.
+    if (check(TokenType::IDENTIFIER) ||
+        (peek().value.size() > 4 && peek().value.compare(0, 2, "__") == 0 &&
+         peek().value.compare(peek().value.size() - 2, 2, "__") == 0)) {
+        func->name = advance().value;
+    }
+    else {
+        throw std::runtime_error("Expected function name at line " +
+            std::to_string(peek().line) + ":" + std::to_string(peek().column));
+    }
     std::cout << "Parsing function: " << func->name << std::endl;
 
     consume(TokenType::LPAREN, "Expected '(' after function name");
@@ -602,8 +612,14 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
         consume(TokenType::NEWLINE, "Expected newline after class definition");
         std::cout << "After newline, position: " << position << ", token: '" << peek().value << "'" << std::endl;
 
-        // FIX: Track starting position for better end detection
-        size_t class_body_start = position;
+        // The class body is an INDENT ... DEDENT block
+        handleIndentation();
+        if (!check(TokenType::INDENT)) {
+            throw std::runtime_error("Expected an indented class body at line " +
+                std::to_string(peek().line) + ":" + std::to_string(peek().column));
+        }
+        advance(); // consume INDENT
+
         int member_count = 0;
 
         while (!atEnd()) {
@@ -612,65 +628,10 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
 
             handleIndentation();
 
-            // FIX: Enhanced end-of-class detection
-            // Check if we've reached a top-level function (not a method)
-            if (check(TokenType::DEF)) {
-                size_t save_pos = position;
-                bool is_standalone_function = false;
-
-                try {
-                    // Look ahead to see if this is a method or standalone function
-                    advance(); // consume 'def'
-
-                    if (check(TokenType::IDENTIFIER)) {
-                        std::string func_name = peek().value;
-                        std::cout << "Found function definition: " << func_name << std::endl;
-
-                        // Check if it has 'self' parameter (method) or not (standalone function)
-                        if (checkNext(TokenType::LPAREN)) {
-                            advance(); // consume function name
-                            advance(); // consume '('
-
-                            // Check first parameter
-                            if (check(TokenType::IDENTIFIER)) {
-                                std::string first_param = peek().value;
-                                std::cout << "First parameter: " << first_param << std::endl;
-
-                                if (first_param != "self") {
-                                    // Function doesn't have 'self' as first parameter - likely standalone
-                                    is_standalone_function = true;
-                                    std::cout << "Detected standalone function: " << func_name
-                                        << " (no 'self' parameter)" << std::endl;
-                                }
-                            }
-                            else if (check(TokenType::RPAREN)) {
-                                // Function has no parameters - definitely standalone
-                                is_standalone_function = true;
-                                std::cout << "Detected standalone function: " << func_name
-                                    << " (no parameters)" << std::endl;
-                            }
-                        }
-                    }
-                }
-                catch (const std::exception& e) {
-                    // If lookahead fails, assume it's a method for safety
-                    std::cout << "Lookahead failed: " << e.what() << ", assuming method" << std::endl;
-                }
-
-                position = save_pos; // Restore position
-
-                if (is_standalone_function) {
-                    std::cout << "=== ENDING CLASS PARSING - Found standalone function ===" << std::endl;
-                    break;
-                }
-            }
-
-            // FIX: Check for other top-level constructs that indicate end of class
-            if ((check(TokenType::CLASS) || check(TokenType::STRUCT) ||
-                check(TokenType::TEMPLATE) || check(TokenType::CONSTEXPR) ||
-                check(TokenType::UNSAFE) || check(TokenType::IMPORT) ||
-                check(TokenType::USE)) && position > class_body_start) {
-                std::cout << "End of class detected (top-level construct): " << peek().value << std::endl;
+            // The matching DEDENT ends the class body
+            if (check(TokenType::DEDENT)) {
+                advance();
+                std::cout << "=== ENDING CLASS PARSING - dedent ===" << std::endl;
                 break;
             }
 
@@ -680,9 +641,10 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
                 break;
             }
 
-            // Skip empty lines
-            if (check(TokenType::NEWLINE)) {
-                advance();
+            if (check(TokenType::INDENT)) {
+                std::cerr << "Error in class body at line " << peek().line
+                    << ": unexpected indentation" << std::endl;
+                skipIndentedRegion();
                 continue;
             }
 
@@ -702,13 +664,13 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
                         else {
                             std::cout << "Failed to parse method" << std::endl;
                             position = method_start;
-                            synchronize();
+                            synchronizeInBlock();
                         }
                     }
                     catch (const std::runtime_error& e) {
                         std::cerr << "Error parsing method at position " << position << ": " << e.what() << std::endl;
                         position = method_start;
-                        synchronize();
+                        synchronizeInBlock();
                     }
                 }
                 else if (isClassAttributeDeclaration()) {
@@ -720,7 +682,7 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
                     }
                     else {
                         std::cout << "Failed to parse class attribute" << std::endl;
-                        synchronize();
+                        synchronizeInBlock();
                     }
                 }
                 else {
@@ -733,13 +695,13 @@ std::unique_ptr<ClassDef> PyCppParser::parseClassDef() {
                     else {
                         std::cout << "Unexpected token in class at position " << position
                             << ": '" << peek().value << "' type: " << static_cast<int>(peek().type) << std::endl;
-                        synchronize();
+                        synchronizeInBlock();
                     }
                 }
             }
             catch (const std::runtime_error& e) {
                 std::cerr << "Error parsing class member at position " << position << ": " << e.what() << std::endl;
-                synchronize();
+                synchronizeInBlock();
             }
 
             member_count++;
@@ -884,18 +846,26 @@ std::unique_ptr<StructDef> PyCppParser::parseStructDef() {
     // Struct name
     struct_def->name = consume(TokenType::IDENTIFIER, "Expected struct name").value;
 
-    // Struct body
+    // Struct body: an INDENT ... DEDENT block of typed fields
     consume(TokenType::COLON, "Expected ':' before struct body");
     consume(TokenType::NEWLINE, "Expected newline after struct definition");
 
-    // Parse struct fields
+    handleIndentation();
+    if (!check(TokenType::INDENT)) {
+        throw std::runtime_error("Expected an indented struct body at line " +
+            std::to_string(peek().line) + ":" + std::to_string(peek().column));
+    }
+    advance(); // consume INDENT
+
     while (!atEnd()) {
         handleIndentation();
 
-        // Check for end of struct
-        if (check(TokenType::CLASS) || check(TokenType::DEF) ||
-            check(TokenType::STRUCT) || check(TokenType::TEMPLATE) ||
-            atEnd()) {
+        if (check(TokenType::DEDENT)) {
+            advance(); // end of struct body
+            break;
+        }
+
+        if (atEnd()) {
             break;
         }
 
@@ -903,7 +873,9 @@ std::unique_ptr<StructDef> PyCppParser::parseStructDef() {
             struct_def->fields.push_back(parseVarDecl());
         }
         else {
-            break;
+            throw std::runtime_error("Expected a field declaration in struct '" +
+                struct_def->name + "' at line " + std::to_string(peek().line) +
+                ":" + std::to_string(peek().column));
         }
     }
 
@@ -1391,62 +1363,47 @@ std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
     return use_stmt;
 }
 
-// FIXED: Enhanced block parsing to properly detect end of function
+// Parse an indented block. The caller has already consumed the ':' and the NEWLINE
+// that follows it. A block starts at an INDENT token and ends at the matching
+// DEDENT token produced by the lexer, so nested blocks close at exactly the
+// indentation level they were written at.
 std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
     std::vector<std::unique_ptr<Stmt>> statements;
     std::cout << "Starting to parse block at position " << position << std::endl;
 
-    size_t starting_position = position;
-    int max_statements = 100; // Safety limit
-    int statement_count = 0;
+    handleIndentation();
 
-    while (!atEnd() && statement_count < max_statements) {
-        // Skip empty lines and handle indentation
-        handleIndentation();
+    if (!check(TokenType::INDENT)) {
+        throw std::runtime_error("Expected an indented block at line " +
+            std::to_string(peek().line) + ":" + std::to_string(peek().column));
+    }
+    advance(); // consume INDENT
 
-        // FIXED: Enhanced end-of-block detection
-        // Check for top-level constructs that indicate end of current block
-        if (position > starting_position) {
-            Token current = peek();
+    while (!atEnd()) {
+        handleIndentation(); // skip blank lines
 
-            // These tokens indicate we're back at top-level scope
-            if (current.type == TokenType::CLASS ||
-                current.type == TokenType::DEF ||
-                current.type == TokenType::STRUCT ||
-                current.type == TokenType::TEMPLATE ||
-                current.type == TokenType::CONSTEXPR ||
-                current.type == TokenType::UNSAFE ||
-                current.type == TokenType::IMPORT ||
-                current.type == TokenType::USE) {
-
-                std::cout << "End of block detected (top-level construct): " << current.value << std::endl;
-                break;
-            }
-
-            // Also check for elif/else that belong to outer if statements
-            if ((current.type == TokenType::ELIF || current.type == TokenType::ELSE) &&
-                position > starting_position) {
-                std::cout << "End of block detected (elif/else): " << current.value << std::endl;
-                break;
-            }
-        }
-
-        // Skip if we're at a newline (empty line)
-        if (check(TokenType::NEWLINE)) {
-            advance();
-            continue;
-        }
-
-        // FIXED: Check if we've reached the end of file
-        if (atEnd()) {
-            std::cout << "End of block detected (EOF)" << std::endl;
+        if (check(TokenType::DEDENT)) {
+            advance(); // consume the DEDENT that closes this block
+            std::cout << "End of block (dedent)" << std::endl;
             break;
         }
 
+        if (atEnd()) {
+            break;
+        }
+
+        if (check(TokenType::INDENT)) {
+            // A line indented deeper than the block it belongs to
+            std::cerr << "Error in block at line " << peek().line
+                << ": unexpected indentation" << std::endl;
+            skipIndentedRegion();
+            continue;
+        }
+
+        size_t before = position;
         try {
             if (auto stmt = parseStatement()) {
                 statements.push_back(std::move(stmt));
-                statement_count++;
                 std::cout << "Added statement to block, now has " << statements.size() << " statements" << std::endl;
             }
             else {
@@ -1456,18 +1413,51 @@ std::vector<std::unique_ptr<Stmt>> PyCppParser::parseBlock() {
         }
         catch (const std::runtime_error& e) {
             std::cerr << "Error in block at position " << position << ": " << e.what() << std::endl;
-            // Don't break immediately - try to synchronize and continue
-            synchronize();
+            synchronizeInBlock();
+        }
 
-            // If we haven't made progress after synchronization, break
-            if (position >= tokens.size() || position == starting_position) {
-                break;
-            }
+        if (position == before) {
+            // No progress: skip the offending token so we cannot loop forever
+            advance();
         }
     }
 
     std::cout << "Finished parsing block with " << statements.size() << " statements" << std::endl;
     return statements;
+}
+
+// Skip an INDENT ... DEDENT region (including any regions nested inside it).
+void PyCppParser::skipIndentedRegion() {
+    if (!check(TokenType::INDENT)) return;
+    int depth = 0;
+    while (!atEnd()) {
+        if (check(TokenType::INDENT)) {
+            depth++;
+        }
+        else if (check(TokenType::DEDENT)) {
+            depth--;
+            if (depth == 0) {
+                advance();
+                return;
+            }
+        }
+        advance();
+    }
+}
+
+// Error recovery inside a block: skip to the end of the current line without
+// consuming INDENT/DEDENT tokens, so the block structure stays balanced. If the
+// failed statement opened a nested block, that whole block is skipped too.
+void PyCppParser::synchronizeInBlock() {
+    while (!atEnd() && !check(TokenType::NEWLINE) &&
+        !check(TokenType::INDENT) && !check(TokenType::DEDENT)) {
+        advance();
+    }
+    match(TokenType::NEWLINE);
+    handleIndentation();
+    if (check(TokenType::INDENT)) {
+        skipIndentedRegion();
+    }
 }
 
 // ===== Expression Parsing =====

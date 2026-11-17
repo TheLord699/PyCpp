@@ -257,10 +257,14 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
 
     // Extract imports to generate includes
     std::vector<std::string> import_includes;
+    imported_modules.clear();
     for (auto& stmt : program->statements) {
         if (auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get())) {
             // Generate include for imported module
             import_includes.push_back("\"" + import_stmt->module + ".h\"");
+            // Remember the module name so 'module.member' can be told apart
+            // from 'object.member'
+            imported_modules.insert(import_stmt->module);
         }
     }
 
@@ -269,8 +273,10 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     for (const auto& include : includes) {
         // Extract just the filename if it's a local header with full path
         std::string include_stmt = include;
-        if (include[0] == '"' && include.find("temp\\") != std::string::npos) {
-            // Extract just the filename from paths like "C:\Users\...\temp\test_output.h"
+        if (!include.empty() && include[0] == '"' && include.find_first_of("\\/") != std::string::npos) {
+            // Generated headers sit next to their .cpp file, so a quoted local include
+            // is reduced to its bare filename. This covers both separators, e.g.
+            // "C:\Users\...\temp\test_output.h" and "src/temp/test_output.h".
             size_t last_slash = include.find_last_of("\\/");
             size_t end_quote = include.find_last_of('"');
             if (last_slash != std::string::npos && end_quote != std::string::npos) {
@@ -1683,8 +1689,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
     else if (auto member_access = dynamic_cast<MemberAccess*>(expr)) {
         // Check if this is module access (like greetings.hello)
         if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-            // Check if this identifier is a module (imported symbol)
-            if (ident->name != "self" && ident->name != "this") {
+            // Only identifiers that name an imported module are module accesses;
+            // anything else (e.g. a local variable 'player') is an object access
+            if (ident->name != "self" && ident->name != "this" &&
+                imported_modules.count(ident->name) > 0) {
                 // This is likely a module access like greetings.hello
                 // For now, generate as direct function call since we include the header
                 // In a more advanced implementation, we might use namespaces

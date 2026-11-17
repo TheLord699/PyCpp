@@ -23,6 +23,8 @@ private:
     Token consume(TokenType type, const std::string& error_msg);
     bool atEnd();
     void synchronize();
+    void synchronizeInBlock();
+    void skipIndentedRegion();
     void handleIndentation();
     bool isBuiltInFunctionToken(TokenType type);
 

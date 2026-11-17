@@ -1,0 +1,485 @@
+
+# ==========================================
+# PyCPP - Comprehensive Language Test
+# File: test_all.pycpp
+# ==========================================
+
+use <cmath>
+
+# ------------------------------------------
+# 1. Basic types and variables
+# ------------------------------------------
+
+def test_basic_types() -> bool:
+    age: int = 21
+    small: i8 = 100
+    medium: i16 = 1000
+    large: i32 = 100000
+    huge: i64 = 1000000000
+
+    height: float = 1.85
+    pi: double = 3.141592653589793
+
+    active: bool = True
+    name: str = "PyCPP"
+
+    assert age == 21
+    assert small == 100
+    assert medium == 1000
+    assert large == 100000
+    assert huge == 1000000000
+    assert active == True
+    assert name == "PyCPP"
+
+    return True
+
+
+# ------------------------------------------
+# 2. Functions and arguments
+# ------------------------------------------
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def multiply(a: double, b: double) -> double:
+    return a * b
+
+
+def modify(value: &int) -> void:
+    value += 10
+
+
+def inspect(value: const &str) -> bool:
+    return value == "Hello"
+
+
+def test_functions() -> bool:
+    result: int = add(10, 20)
+
+    assert result == 30
+    assert multiply(2.0, 5.0) == 10.0
+
+    number: int = 5
+    modify(number)
+
+    assert number == 15
+    assert inspect("Hello")
+
+    return True
+
+
+# ------------------------------------------
+# 3. Conditional statements
+# ------------------------------------------
+
+def test_conditionals() -> bool:
+    score: int = 85
+    result: str = ""
+
+    if score >= 90:
+        result = "A"
+    elif score >= 80:
+        result = "B"
+    elif score >= 70:
+        result = "C"
+    else:
+        result = "F"
+
+    assert result == "B"
+
+    return True
+
+
+# ------------------------------------------
+# 4. Loops
+# ------------------------------------------
+
+def test_loops() -> bool:
+    total: int = 0
+
+    for i in range(10):
+        total += i
+
+    assert total == 45
+
+    counter: int = 0
+
+    while counter < 5:
+        counter += 1
+
+    assert counter == 5
+
+    return True
+
+
+def test_loop_control() -> bool:
+    total: int = 0
+
+    for i in range(10):
+        if i == 3:
+            continue
+
+        if i == 7:
+            break
+
+        total += i
+
+    assert total == 18
+
+    return True
+
+
+# ------------------------------------------
+# 5. Classes and constructors
+# ------------------------------------------
+
+class Player:
+    def __init__(self, name: str, health: int):
+        self.name: str = name
+        self.health: int = health
+
+    def damage(self, amount: int) -> void:
+        self.health -= amount
+
+    def heal(self, amount: int) -> void:
+        self.health += amount
+
+    def is_alive(self) -> bool:
+        return self.health > 0
+
+
+def test_classes() -> bool:
+    player: Player = Player("Alex", 100)
+
+    player.damage(30)
+    assert player.health == 70
+
+    player.heal(20)
+    assert player.health == 90
+
+    assert player.is_alive()
+
+    return True
+
+
+# ------------------------------------------
+# 6. Structs
+# ------------------------------------------
+
+struct Vector2:
+    x: float
+    y: float
+
+
+def test_structs() -> bool:
+    position: Vector2 = Vector2(10.0, 20.0)
+
+    assert position.x == 10.0
+    assert position.y == 20.0
+
+    return True
+
+
+# ------------------------------------------
+# 7. Collections / STL
+# ------------------------------------------
+
+def test_lists() -> bool:
+    numbers: list[int] = [1, 2, 3, 4, 5]
+
+    assert numbers.size() == 5
+    assert numbers[0] == 1
+    assert numbers[4] == 5
+
+    numbers.push_back(6)
+
+    assert numbers.size() == 6
+    assert numbers[5] == 6
+
+    return True
+
+
+def test_dictionaries() -> bool:
+    scores: dict[str, int] = {
+        "Alex": 100,
+        "Sam": 80,
+        "John": 90
+    }
+
+    assert scores["Alex"] == 100
+    assert scores["Sam"] == 80
+
+    scores["Sam"] = 95
+
+    assert scores["Sam"] == 95
+
+    return True
+
+
+# ------------------------------------------
+# 8. Generic functions / templates
+# ------------------------------------------
+
+def maximum[T](a: T, b: T) -> T:
+    if a > b:
+        return a
+
+    return b
+
+
+def minimum[T](a: T, b: T) -> T:
+    if a < b:
+        return a
+
+    return b
+
+
+def test_templates() -> bool:
+    int_max: int = maximum(10, 20)
+    float_max: double = maximum(3.5, 8.5)
+
+    int_min: int = minimum(10, 20)
+
+    assert int_max == 20
+    assert float_max == 8.5
+    assert int_min == 10
+
+    return True
+
+
+# ------------------------------------------
+# 9. Generic classes
+# ------------------------------------------
+
+class Container[T]:
+    def __init__(self, value: T):
+        self.value: T = value
+
+    def get(self) -> T:
+        return self.value
+
+
+def test_generic_classes() -> bool:
+    int_container: Container[int] = Container[int](100)
+    str_container: Container[str] = Container[str]("Hello")
+
+    assert int_container.get() == 100
+    assert str_container.get() == "Hello"
+
+    return True
+
+
+# ------------------------------------------
+# 10. Constexpr
+# ------------------------------------------
+
+constexpr MAX_PLAYERS: int = 100
+constexpr PI: double = 3.141592653589793
+
+
+def test_constexpr() -> bool:
+    assert MAX_PLAYERS == 100
+    assert PI > 3.14
+
+    return True
+
+
+# ------------------------------------------
+# 11. Pointers and unsafe operations
+# ------------------------------------------
+
+def test_pointers() -> bool:
+    value: int = 42
+    pointer: *int = &value
+
+    unsafe:
+        assert *pointer == 42
+        *pointer = 100
+
+    assert value == 100
+
+    return True
+
+
+# ------------------------------------------
+# 12. Manual memory management
+# ------------------------------------------
+
+def test_memory() -> bool:
+    pointer: *int = mem.alloc[int]()
+
+    unsafe:
+        *pointer = 123
+        assert *pointer == 123
+
+    mem.free(pointer)
+
+    return True
+
+
+# ------------------------------------------
+# 13. Nested loops
+# ------------------------------------------
+
+def test_nested_loops() -> bool:
+    total: int = 0
+
+    for x in range(3):
+        for y in range(3):
+            total += x * y
+
+    assert total == 9
+
+    return True
+
+
+# ------------------------------------------
+# 14. Mathematical operations
+# ------------------------------------------
+
+def test_math() -> bool:
+    value: double = 25.0
+
+    result: double = sqrt(value)
+
+    assert result == 5.0
+
+    return True
+
+
+# ------------------------------------------
+# 15. Main test runner
+# ------------------------------------------
+
+def main() -> int:
+    passed: int = 0
+    failed: int = 0
+
+    print("================================")
+    print("       PyCPP TEST SUITE")
+    print("================================")
+
+    if test_basic_types():
+        print("[PASS] Basic types")
+        passed += 1
+    else:
+        print("[FAIL] Basic types")
+        failed += 1
+
+    if test_functions():
+        print("[PASS] Functions")
+        passed += 1
+    else:
+        print("[FAIL] Functions")
+        failed += 1
+
+    if test_conditionals():
+        print("[PASS] Conditionals")
+        passed += 1
+    else:
+        print("[FAIL] Conditionals")
+        failed += 1
+
+    if test_loops():
+        print("[PASS] Loops")
+        passed += 1
+    else:
+        print("[FAIL] Loops")
+        failed += 1
+
+    if test_loop_control():
+        print("[PASS] Loop control")
+        passed += 1
+    else:
+        print("[FAIL] Loop control")
+        failed += 1
+
+    if test_classes():
+        print("[PASS] Classes")
+        passed += 1
+    else:
+        print("[FAIL] Classes")
+        failed += 1
+
+    if test_structs():
+        print("[PASS] Structs")
+        passed += 1
+    else:
+        print("[FAIL] Structs")
+        failed += 1
+
+    if test_lists():
+        print("[PASS] Lists")
+        passed += 1
+    else:
+        print("[FAIL] Lists")
+        failed += 1
+
+    if test_dictionaries():
+        print("[PASS] Dictionaries")
+        passed += 1
+    else:
+        print("[FAIL] Dictionaries")
+        failed += 1
+
+    if test_templates():
+        print("[PASS] Templates")
+        passed += 1
+    else:
+        print("[FAIL] Templates")
+        failed += 1
+
+    if test_generic_classes():
+        print("[PASS] Generic classes")
+        passed += 1
+    else:
+        print("[FAIL] Generic classes")
+        failed += 1
+
+    if test_constexpr():
+        print("[PASS] Constexpr")
+        passed += 1
+    else:
+        print("[FAIL] Constexpr")
+        failed += 1
+
+    if test_pointers():
+        print("[PASS] Pointers")
+        passed += 1
+    else:
+        print("[FAIL] Pointers")
+        failed += 1
+
+    if test_memory():
+        print("[PASS] Memory management")
+        passed += 1
+    else:
+        print("[FAIL] Memory management")
+        failed += 1
+
+    if test_nested_loops():
+        print("[PASS] Nested loops")
+        passed += 1
+    else:
+        print("[FAIL] Nested loops")
+        failed += 1
+
+    if test_math():
+        print("[PASS] Math")
+        passed += 1
+    else:
+        print("[FAIL] Math")
+        failed += 1
+
+    print("--------------------------------")
+    print("Passed:", passed)
+    print("Failed:", failed)
+    print("--------------------------------")
+
+    if failed == 0:
+        print("ALL TESTS PASSED!")
+        return 0
+
+    print("SOME TESTS FAILED!")
+    return 1

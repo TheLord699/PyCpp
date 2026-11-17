@@ -1,0 +1,21 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string"] }
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(def|class|struct|if|elif|else|for|while|unsafe).*:\\s*$",
+    "decreaseIndentPattern": "^\\s*(return|break|continue)\\b"
+  }
+}

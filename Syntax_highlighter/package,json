@@ -1,0 +1,25 @@
+{
+  "name": "pycpp-syntax",
+  "displayName": "PyCPP Syntax Highlighting",
+  "description": "Pythonic Syntax, Native C++ Power",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "pycpp",
+      "aliases": ["PyCPP", "pycpp"],
+      "extensions": [".pycpp"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "pycpp",
+      "scopeName": "source.pycpp",
+      "path": "./syntaxes/pycpp.tmLanguage.json"
+    }]
+  }
+}

@@ -3,6 +3,7 @@ from enemy import Enemy
 use <raylib.h>
 
 def main() -> int:
+    SetConfigFlags(FLAG_VSYNC_HINT)
     InitWindow(800, 600, "PyCPP Multi-File Dodge")
     SetTargetFPS(60)
 

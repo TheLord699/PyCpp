@@ -1894,6 +1894,11 @@ void CodeGenerator::generateExpression(Expr* expr) {
                         generateExpression(bin_op->right.get());
                         return; // Early return to avoid extra parentheses
                     }
+                    // Any other identifier: emit obj.member = value
+                    generateExpression(member_access->object.get());
+                    output << "." << member_access->member << " = ";
+                    generateExpression(bin_op->right.get());
+                    return;
                 }
             }
 
@@ -1964,7 +1969,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
             // Only identifiers that name an imported module are module accesses;
             // anything else (e.g. a local variable 'player') is an object access
             if (ident->name != "self" && ident->name != "this" &&
-                imported_modules.count(ident->name) > 0) {
+                imported_modules.count(ident->name) > 0 &&
+                lookupVar(ident->name) == nullptr) {
                 // This is likely a module access like greetings.hello
                 // For now, generate as direct function call since we include the header
                 // In a more advanced implementation, we might use namespaces

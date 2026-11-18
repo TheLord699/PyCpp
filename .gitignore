@@ -144,6 +144,8 @@ run_all.ps1
 .axoCover/*
 !.axoCover/settings.json
 
+test_logs
+
 # Never track PyCpp temp directories
 temp/
 

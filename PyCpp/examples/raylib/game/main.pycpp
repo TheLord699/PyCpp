@@ -5,6 +5,7 @@ from enemy import Enemy
 from bullet import Bullet
 
 def main() -> int:
+    SetConfigFlags(FLAG_VSYNC_HINT)
     InitWindow(800, 600, "PyCPP Space Defender")
     SetTargetFPS(60)
 

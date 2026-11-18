@@ -252,6 +252,7 @@ void printUsage(const std::string& programName) {
     std::cout << "  --single-file    Compile only the specified file (no auto-deps)\n";
     std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, msvc or auto\n";
     std::cout << "                   (default: auto = msvc on Windows, gcc elsewhere)\n";
+    std::cout << "  --linker-flags <flags>  Extra flags passed to the linker (e.g. \"-lraylib -lopengl32\")\n"; // --- ADDED ---
     std::cout << "  -I <path>        Add directory to import search path\n\n";
     std::cout << "Examples:\n";
     std::cout << "  " << programName << " program.pycpp                          # Multi-file compilation with auto-deps\n";
@@ -263,12 +264,14 @@ void printUsage(const std::string& programName) {
     std::cout << "  " << programName << " program.pycpp -I ./lib               # With custom import path\n";
     std::cout << "  " << programName << " program.pycpp --compiler gcc          # Build with g++\n";
     std::cout << "  " << programName << " program.pycpp --compiler msvc         # Build with Visual Studio (cl.exe)\n";
+    std::cout << "  " << programName << " game.pycpp --linker-flags \"-lraylib -lopengl32 -lgdi32 -lwinmm\"  # Link external libraries\n"; // --- ADDED ---
 }
 
 // Compile the generated C++ with the selected compiler, then run the result.
 // Returns true when the program was built and started.
 bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles,
-    const std::string& exeFile, const std::string& includeDir, bool verbose) {
+    const std::string& exeFile, const std::string& includeDir, bool verbose,
+    const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
     std::string reason;
     if (!CompilerBackend::isAvailable(compiler, reason)) {
         TerminalFormatter::printError(reason);
@@ -279,6 +282,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
     request.cppFiles = cppFiles;
     request.exeFile = exeFile;
     request.includeDir = includeDir;
+    request.linkerFlags = linkerFlags; // --- ADDED ---
 
     TerminalFormatter::printCompile("Compiling with " + CompilerBackend::displayName(compiler) + "...");
     for (const auto& file : cppFiles) {
@@ -311,7 +315,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
 // Multi-file compilation with automatic dependency resolution (DEFAULT)
 bool compileMultiFile(const std::string& inputFile, const std::string& outputBase,
     const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile,
-    CompilerKind compiler) {
+    CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -368,7 +372,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         const std::string outputName = std::filesystem::path(outputBase).filename().string();
         std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose);
+        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose, linkerFlags); // --- ADDED linkerFlags ---
 
         if (!compilationSuccess) {
             TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
@@ -415,7 +419,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
 
 // Single-file compilation (optional with --single-file flag)
 bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp,
-    CompilerKind compiler) {
+    CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -460,7 +464,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         std::string cppFile = (tempDir / (outputName + ".cpp")).string();
         std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose);
+        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose, linkerFlags); // --- ADDED linkerFlags ---
 
         if (!compilationSuccess) {
             TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
@@ -498,7 +502,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
     }
 }
 
-bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler) {
+bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
     if (noCompile) {
         try {
             std::ifstream file(inputFile);
@@ -539,11 +543,11 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
     }
     else if (singleFile) {
         // Use single-file compilation only when explicitly requested
-        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler);
+        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler, linkerFlags); // --- ADDED linkerFlags ---
     }
     else {
         // DEFAULT: Use multi-file compilation with auto-dependency resolution
-        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler);
+        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler, linkerFlags); // --- ADDED linkerFlags ---
     }
 }
 
@@ -561,6 +565,7 @@ int main(int argc, char* argv[]) {
     bool singleFile = false;  // Default is multi-file compilation
     CompilerKind requestedCompiler = CompilerKind::Auto;
     std::vector<std::string> importPaths;
+    std::string linkerFlags; // --- ADDED ---
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -595,6 +600,13 @@ int main(int argc, char* argv[]) {
             }
             if (!CompilerBackend::parseKind(value, requestedCompiler)) {
                 TerminalFormatter::printError("Unknown compiler '" + value + "' (expected gcc, msvc or auto)");
+                return 1;
+            }
+        }
+        else if (arg == "--linker-flags") { // --- ADDED ---
+            if (i + 1 < argc) linkerFlags = argv[++i];
+            else {
+                TerminalFormatter::printError("--linker-flags option requires a value");
                 return 1;
             }
         }
@@ -652,6 +664,9 @@ int main(int argc, char* argv[]) {
             }
             TerminalFormatter::printInfo("Import paths: " + paths);
         }
+        if (!linkerFlags.empty()) { // --- ADDED ---
+            TerminalFormatter::printInfo("Linker flags: " + linkerFlags);
+        }
     }
 
     const CompilerKind compiler = CompilerBackend::resolve(requestedCompiler);
@@ -659,6 +674,6 @@ int main(int argc, char* argv[]) {
         TerminalFormatter::printInfo("Compiler: " + CompilerBackend::displayName(compiler));
     }
 
-    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler);
+    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler, linkerFlags); // --- ADDED linkerFlags ---
     return success ? 0 : 1;
 }

@@ -17,6 +17,7 @@ struct CompileRequest {
     std::vector<std::string> cppFiles; // generated implementation files (all modules)
     std::string exeFile;               // output executable path
     std::string includeDir;            // directory holding the generated headers
+    std::string linkerFlags;
 };
 
 class CompilerBackend {

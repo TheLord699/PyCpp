@@ -1,0 +1,9 @@
+def main() -> int:
+    response: int = input("Set value: ")
+    
+    if response > 0:
+        print("Positive")
+    else:
+        print("Negative")
+
+    return 0

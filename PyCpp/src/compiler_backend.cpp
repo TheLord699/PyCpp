@@ -152,6 +152,8 @@ std::string CompilerBackend::buildCompileCommand(CompilerKind kind, const Compil
         }
         command += " -o " + quoteArg(request.exeFile);
         command += " -I" + quoteArg(request.includeDir);
+        command += " " + request.linkerFlags;
+        
     }
 
     return command;
@@ -235,5 +237,5 @@ bool CompilerBackend::compile(CompilerKind kind, const CompileRequest& request, 
 
 int CompilerBackend::run(const std::string& exeFile,
     const std::function<void(const std::string&)>& onOutput) {
-    return runCommand(quoteArg(exeFile) + " 2>&1", onOutput);
+    return exitCodeFromStatus(std::system(quoteArg(exeFile).c_str()));
 }

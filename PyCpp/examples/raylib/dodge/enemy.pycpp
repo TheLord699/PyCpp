@@ -1,0 +1,20 @@
+use <raylib.h>
+
+class Enemy:
+    def __init__(self, start_x: float, size: float, speed: float):
+        self.x: float = start_x
+        self.y: float = -size
+        self.size: float = size
+        self.speed: float = speed
+
+    def update(self) -> void:
+        self.y += self.speed
+        if self.y > 600:
+            self.y = -self.size
+            self.x = float(GetRandomValue(0, 760))
+
+    def draw(self) -> void:
+        DrawRectangle(int(self.x), int(self.y), int(self.size), int(self.size), RED)
+
+    def get_rect(self) -> Rectangle:
+        return Rectangle(self.x, self.y, self.size, self.size)

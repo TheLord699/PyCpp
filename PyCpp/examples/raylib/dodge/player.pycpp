@@ -1,0 +1,20 @@
+use <raylib.h>
+
+class Player:
+    def __init__(self, start_x: float, start_y: float, size: float):
+        self.x: float = start_x
+        self.y: float = start_y
+        self.size: float = size
+        self.speed: float = 6.0
+
+    def update(self) -> void:
+        if IsKeyDown(KEY_LEFT) and self.x > 0:
+            self.x -= self.speed
+        if IsKeyDown(KEY_RIGHT) and self.x < 800 - self.size:
+            self.x += self.speed
+
+    def draw(self) -> void:
+        DrawRectangle(int(self.x), int(self.y), int(self.size), int(self.size), BLUE)
+
+    def get_rect(self) -> Rectangle:
+        return Rectangle(self.x, self.y, self.size, self.size)

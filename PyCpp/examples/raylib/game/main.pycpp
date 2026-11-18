@@ -1,45 +1,73 @@
 use <raylib.h>
+from vec2 import Vec2
+from player import Player
+from enemy import Enemy
+from bullet import Bullet
 
 def main() -> int:
-    InitWindow(800, 600, "PyCPP Dodge")
+    InitWindow(800, 600, "PyCPP Space Defender")
     SetTargetFPS(60)
 
-    # Player variables
-    player_x: float = 400.0
-    player_y: float = 550.0
-    player_size: float = 40.0
-    player_speed: float = 6.0
+    # Use a list to hold our enemies and bullets
+    enemies: list[Enemy] = []
+    bullets: list[Bullet] = []
 
-    # Enemy variables
-    enemy_x: float = 400.0
-    enemy_y: float = 0.0
-    enemy_size: float = 40.0
-    enemy_speed: float = 4.0
-
-    # Game state
+    hero: Player = Player(Vec2(380.0, 540.0))
+    spawn_timer: float = 0.0
     game_over: bool = false
 
     while WindowShouldClose() == false:
+        # Calculate delta time in seconds
+        delta: float = GetFrameTime()
+
         if game_over == false:
-            # --- UPDATE PLAYER ---
-            if IsKeyDown(KEY_LEFT) and player_x > 0:
-                player_x -= player_speed
-            if IsKeyDown(KEY_RIGHT) and player_x < 800 - player_size:
-                player_x += player_speed
+            hero.update(delta)
+            
+            # --- SHOOTING ---
+            if IsKeyDown(KEY_SPACE) and hero.shoot_cooldown <= 0:
+                bullets.append(Bullet(Vec2(hero.pos.x + 17.0, hero.pos.y - 10.0)))
+                hero.shoot_cooldown = 0.2
 
-            # --- UPDATE ENEMY ---
-            enemy_y += enemy_speed
-            if enemy_y > 600:
-                enemy_y = 0
-                # Use explicit type cast
-                enemy_x = float(GetRandomValue(0, 760))
+            # --- SPAWN ENEMIES ---
+            spawn_timer += delta
+            if spawn_timer > 1.0:
+                spawn_timer = 0.0
+                random_x: float = float(GetRandomValue(0, 770))
+                enemies.append(Enemy(Vec2(random_x, -30.0)))
 
-            # --- CHECK COLLISION ---
-            if CheckCollisionRecs(
-                Rectangle(player_x, player_y, player_size, player_size),
-                Rectangle(enemy_x, enemy_y, enemy_size, enemy_size)
-            ):
-                game_over = true
+            # --- UPDATE BULLETS ---
+            for b in bullets:
+                b.update(delta)
+            
+            # --- UPDATE ENEMIES ---
+            for e in enemies:
+                e.update(delta)
+
+            # --- CHECK COLLISIONS ---
+            for b in bullets:
+                for e in enemies:
+                    if b.active and e.active and CheckCollisionRecs(b.get_rect(), e.get_rect()):
+                        b.active = false
+                        e.active = false
+
+            for e in enemies:
+                if e.active and CheckCollisionRecs(hero.get_rect(), e.get_rect()):
+                    game_over = true
+
+            # --- CLEANUP ---
+            # Filter out inactive bullets and enemies
+            # PyCPP doesn't have list comprehensions yet, so we do it manually
+            active_bullets: list[Bullet] = []
+            for b in bullets:
+                if b.active:
+                    active_bullets.append(b)
+            bullets = active_bullets
+
+            active_enemies: list[Enemy] = []
+            for e in enemies:
+                if e.active:
+                    active_enemies.append(e)
+            enemies = active_enemies
 
         # --- DRAW ---
         BeginDrawing()
@@ -49,9 +77,11 @@ def main() -> int:
             DrawText("GAME OVER", 250, 280, 40, RED)
             DrawText("Press ESC to quit", 280, 330, 20, LIGHTGRAY)
         else:
-            # Use explicit type casts for the drawing functions
-            DrawRectangle(int(player_x), int(player_y), int(player_size), int(player_size), BLUE)
-            DrawRectangle(int(enemy_x), int(enemy_y), int(enemy_size), int(enemy_size), RED)
+            hero.draw()
+            for b in bullets:
+                b.draw()
+            for e in enemies:
+                e.draw()
 
         EndDrawing()
 

@@ -1,0 +1,18 @@
+use <raylib.h>
+from vec2 import Vec2
+
+class Entity:
+    def __init__(self):
+        self.pos: Vec2 = Vec2(0.0, 0.0)
+        self.size: float = 0.0
+        self.color: Color = BLACK
+        self.active: bool = false
+
+    def update(self, delta: float) -> void:
+        pass
+
+    def draw(self) -> void:
+        DrawRectangle(int(self.pos.x), int(self.pos.y), int(self.size), int(self.size), self.color)
+
+    def get_rect(self) -> Rectangle:
+        return Rectangle(self.pos.x, self.pos.y, self.size, self.size)

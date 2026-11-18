@@ -145,6 +145,9 @@ _TeamCity*
 # Never track PyCpp temp directories
 temp/
 
+# Ignore compiled executables
+*.exe
+
 # Coverlet is a free, cross platform Code Coverage Tool
 coverage*.json
 coverage*.xml

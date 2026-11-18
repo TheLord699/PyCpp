@@ -1,0 +1,59 @@
+use <raylib.h>
+
+def main() -> int:
+    InitWindow(800, 600, "PyCPP Dodge")
+    SetTargetFPS(60)
+
+    # Player variables
+    player_x: float = 400.0
+    player_y: float = 550.0
+    player_size: float = 40.0
+    player_speed: float = 6.0
+
+    # Enemy variables
+    enemy_x: float = 400.0
+    enemy_y: float = 0.0
+    enemy_size: float = 40.0
+    enemy_speed: float = 4.0
+
+    # Game state
+    game_over: bool = false
+
+    while WindowShouldClose() == false:
+        if game_over == false:
+            # --- UPDATE PLAYER ---
+            if IsKeyDown(KEY_LEFT) and player_x > 0:
+                player_x -= player_speed
+            if IsKeyDown(KEY_RIGHT) and player_x < 800 - player_size:
+                player_x += player_speed
+
+            # --- UPDATE ENEMY ---
+            enemy_y += enemy_speed
+            if enemy_y > 600:
+                enemy_y = 0
+                # Use explicit type cast
+                enemy_x = float(GetRandomValue(0, 760))
+
+            # --- CHECK COLLISION ---
+            if CheckCollisionRecs(
+                Rectangle(player_x, player_y, player_size, player_size),
+                Rectangle(enemy_x, enemy_y, enemy_size, enemy_size)
+            ):
+                game_over = true
+
+        # --- DRAW ---
+        BeginDrawing()
+        ClearBackground(BLACK)
+
+        if game_over:
+            DrawText("GAME OVER", 250, 280, 40, RED)
+            DrawText("Press ESC to quit", 280, 330, 20, LIGHTGRAY)
+        else:
+            # Use explicit type casts for the drawing functions
+            DrawRectangle(int(player_x), int(player_y), int(player_size), int(player_size), BLUE)
+            DrawRectangle(int(enemy_x), int(enemy_y), int(enemy_size), int(enemy_size), RED)
+
+        EndDrawing()
+
+    CloseWindow()
+    return 0

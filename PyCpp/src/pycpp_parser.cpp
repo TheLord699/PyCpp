@@ -2149,6 +2149,23 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
             consume(TokenType::RPAREN, "Expected ')' after expression");
             result = std::move(expr);
         }
+        // Allow explicit casts: int(x), float(x), str(x), bool(x)
+        else if (check(TokenType::INT) || check(TokenType::FLOAT) ||
+                 check(TokenType::STR) || check(TokenType::BOOL)) {
+            std::string type_name = peek().value;
+            advance();
+            
+            if (check(TokenType::LPAREN)) {
+                auto ident = std::make_unique<Identifier>();
+                ident->name = type_name;
+                ident->line = tokens[position - 1].line;
+                ident->column = tokens[position - 1].column;
+                result = parseCall(std::move(ident));
+            }
+            else {
+                throw std::runtime_error("Expected '(' after cast type '" + type_name + "'");
+            }
+        }
         else {
             // If we get here and the token is a colon or equals, it might be part of a declaration
             if (check(TokenType::COLON) || check(TokenType::EQUAL)) {

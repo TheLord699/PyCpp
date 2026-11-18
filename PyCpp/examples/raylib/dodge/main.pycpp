@@ -15,7 +15,7 @@ def main() -> int:
     while WindowShouldClose() == false:
         if game_over == false:
             hero.update()
-            hazard.update()
+            hazard.update(hero)
 
             if CheckCollisionRecs(hero.get_rect(), hazard.get_rect()):
                 game_over = true
@@ -34,6 +34,7 @@ def main() -> int:
         else:
             hero.draw()
             hazard.draw()
+            DrawText(TextFormat("Score: %d", hero.score), 10, 10, 20, WHITE)
 
         EndDrawing()
 

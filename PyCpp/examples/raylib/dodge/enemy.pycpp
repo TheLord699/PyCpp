@@ -1,4 +1,5 @@
 use <raylib.h>
+from player import Player
 
 class Enemy:
     def __init__(self, start_x: float, size: float, speed: float):
@@ -7,11 +8,12 @@ class Enemy:
         self.size: float = size
         self.speed: float = speed
 
-    def update(self) -> void:
+    def update(self, player: &Player) -> void:
         self.y += self.speed
         if self.y > 600:
             self.y = -self.size
             self.x = float(GetRandomValue(0, 760))
+            player.score += 1
 
     def draw(self) -> void:
         DrawRectangle(int(self.x), int(self.y), int(self.size), int(self.size), RED)

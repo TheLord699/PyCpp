@@ -1,14 +1,13 @@
 def main() -> int:
     print("--- Pointer Math ---")
-    
     x: int = 42
     ptr: *int = &x
     
-    unsafe:
-        print(ptr)       # Prints the memory address
-        print(*ptr)      # Dereference to print 42
-        
-        *ptr = 99        # <--- Fixed: Dereference to write
-        print(x)         # Should print 99
-        
+    print(ptr)
+    print(*ptr)
+    
+    *ptr = 99
+    
+    print(x)
+    
     return 0

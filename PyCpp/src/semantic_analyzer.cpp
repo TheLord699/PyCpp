@@ -406,12 +406,6 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
 
         // Handle regular member access like self.health
         analyzeExpression(member_access->object.get());
-        if (auto obj = dynamic_cast<Identifier*>(member_access->object.get())) {
-            Symbol* sym = findSymbol(obj->name);
-            if (sym && !sym->type.empty() && sym->type.back() == '*' && unsafe_depth == 0)
-                error("Accessing '" + member_access->member + "' through pointer '" + obj->name +
-                    "' requires an 'unsafe:' block", member_access->line, member_access->column);
-        }
 
         // Check if the object is "self" in a class context
         if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
@@ -521,14 +515,6 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
     }
     else if (auto call = dynamic_cast<CallExpr*>(expr)) {
         pycpp::debugLog() << "Found function call" << std::endl;
-        if (call->is_subscript && unsafe_depth == 0) {
-            if (auto ptr_ident = dynamic_cast<Identifier*>(call->callee.get())) {
-                Symbol* sym = findSymbol(ptr_ident->name);
-                if (sym && !sym->type.empty() && sym->type.back() == '*')
-                    error("Indexing pointer '" + ptr_ident->name + "' requires an 'unsafe:' block",
-                        call->line, call->column);
-            }
-        }
         analyzeExpression(call->callee.get());
         for (auto& arg : call->arguments) {
             analyzeExpression(arg.get());
@@ -566,8 +552,6 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
     }
     else if (auto unary_op = dynamic_cast<UnaryOp*>(expr)) {
         pycpp::debugLog() << "Found unary operation: " << unary_op->op << std::endl;
-        if (unary_op->op == "*" && unsafe_depth == 0)
-            error("Pointer dereference requires an 'unsafe:' block", unary_op->line, unary_op->column);
         analyzeExpression(unary_op->operand.get());
     }
     else if (auto ternary_op = dynamic_cast<TernaryOp*>(expr)) {
@@ -708,13 +692,11 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
         pycpp::debugLog() << "Found use statement for library: " << use_stmt->library << std::endl;
     }
     else if (auto unsafe_block = dynamic_cast<UnsafeBlock*>(stmt)) {
-        unsafe_depth++;
         enterScope();
         for (auto& inner : unsafe_block->body) {
             analyzeStatement(inner.get());
         }
         exitScope();
-        unsafe_depth--;
     }
     else if (auto block = dynamic_cast<Block*>(stmt)) {
         enterScope();
@@ -1108,11 +1090,9 @@ void SemanticAnalyzer::visit(IfStmt& node) { analyzeIfStmt(&node); }
 void SemanticAnalyzer::visit(WhileStmt& node) { analyzeWhileStmt(&node); }
 void SemanticAnalyzer::visit(ForStmt& node) { analyzeForStmt(&node); }
 void SemanticAnalyzer::visit(UnsafeBlock& node) {
-    unsafe_depth++;
     enterScope();
     for (auto& stmt : node.body) { stmt->accept(*this); }
     exitScope();
-    unsafe_depth--;
 }
 void SemanticAnalyzer::visit(ExprStmt& node) { analyzeExpression(node.expr.get()); }
 void SemanticAnalyzer::visit(Block& node) {

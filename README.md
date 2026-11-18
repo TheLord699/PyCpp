@@ -205,25 +205,12 @@ def main() -> int:
     return 0
 ```
 
-Reading or writing through a pointer, accessing members through a pointer, and indexing a pointer are only allowed inside `unsafe:`. Taking an address (`&x`) and `mem.alloc` / `mem.free` are safe.
-
-```
-def main() -> int:
-    value: int = 42
-    pointer: *int = &value
-    unsafe:
-        *pointer = 100      # write through a pointer
-        *pointer += 1
-    return 0
-```
-
-Dereferencing outside `unsafe:` is a compile error.
+Pointers give you direct memory access. Taking an address (`&x`), dereferencing (`*ptr`), and assigning through a pointer (`*ptr = 100`) all work anywhere in the language.
 
 Features:
 
 - `mem.alloc()` — allocate memory.
 - `mem.free()` — release memory.
-- `unsafe:` — enable explicitly unsafe operations.
 - Pointer arithmetic.
 - Direct memory manipulation.
 

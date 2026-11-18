@@ -49,7 +49,6 @@ private:
     int current_scope;
     FunctionSymbol* current_function;
     ClassSymbol* current_class;
-    int unsafe_depth = 0; // > 0 while inside an 'unsafe:' block
 
     // Built-in usage tracking
     std::unordered_set<std::string> used_builtins;

@@ -71,6 +71,7 @@ public:
     std::unique_ptr<PassStmt> parsePassStmt();
     std::unique_ptr<BreakStmt> parseBreakStmt();
     std::unique_ptr<ContinueStmt> parseContinueStmt();
+    std::unique_ptr<Stmt> parseAssertStmt();
 
     // Import and use statements
     std::unique_ptr<ImportStmt> parseImportStmt();

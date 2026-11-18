@@ -1,0 +1,20 @@
+def test_nesting() -> void:
+    print("--- Testing Nested Logic ---")
+    
+    for i in range(3):
+        if i == 0:
+            print("Zero")
+        elif i == 1:
+            print("One")
+        else:
+            print("Two")
+            
+            # Deeply nested loop inside else
+            for j in range(2):
+                print("Nested loop")
+                if j == 0:
+                    print("First nested")
+                else:
+                    print("Second nested")
+                    
+    print("--- Logic Test Done ---")

@@ -1,0 +1,10 @@
+from nested_logic import test_nesting
+from nested_oop import NestedTester
+
+def main() -> int:
+    test_nesting()
+    
+    tester: NestedTester = NestedTester("Keith")
+    tester.run_deep_test()
+    
+    return 0

@@ -1,0 +1,12 @@
+class Player:
+    def __init__(self, name: str, health: int):
+        self.name: str = name
+        self.health: int = health
+
+    def take_damage(self, amount: int) -> void:
+        self.health -= amount
+        print("Ouch! Took damage.")
+
+    def show_status(self) -> void:
+        print(self.name)
+        print(self.health)

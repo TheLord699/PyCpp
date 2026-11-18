@@ -1,0 +1,23 @@
+def try_to_modify(val: int) -> void:
+    val = 999
+    print("Inside function:")
+    print(val)
+
+def actually_modify(val: &int) -> void:
+    val = 999
+
+def main() -> int:
+    x: int = 10
+    
+    print("Before:")
+    print(x)
+    
+    try_to_modify(x)
+    print("After try_to_modify (should still be 10):")
+    print(x)
+    
+    actually_modify(x)
+    print("After actually_modify (should be 999):")
+    print(x)
+    
+    return 0

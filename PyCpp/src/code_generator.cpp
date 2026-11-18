@@ -510,6 +510,7 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
         {"std::pair", "utility"}, {"std::make_pair", "utility"},
         {"std::function", "functional"}, {"std::unique_ptr", "memory"}, {"std::make_unique", "memory"},
         {"std::shared_ptr", "memory"}, {"std::make_shared", "memory"},
+        {"int8_t", "cstdint"}, {"int16_t", "cstdint"}, {"int32_t", "cstdint"}, {"int64_t", "cstdint"},
     };
     for (const auto& entry : emitted_to_header) {
         if (body.find(entry.first) != std::string::npos) include_manager.trackFeature(entry.second);
@@ -1152,7 +1153,21 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
 
         // Handle built-in functions - COMPREHENSIVE with type conversions
-        if (function_name == "print") {
+        if (function_name == "assert") {
+            require("assert"); // -> <cassert>
+            if (call_expr->arguments.empty()) { output << "assert(true)"; return; }
+            // Double parentheses keep commas inside templates from splitting the macro
+            output << "assert((";
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            if (call_expr->arguments.size() > 1) {
+                output << " && ";
+                generateExpression(call_expr->arguments[1].get());
+            }
+            output << ")";
+            return;
+        }
+        else         if (function_name == "print") {
             require("iostream");
             output << "std::cout";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
@@ -1877,7 +1892,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
             // Regular assignment
             bool needs_parens = !dynamic_cast<Identifier*>(bin_op->left.get()) &&
                 !dynamic_cast<MemberAccess*>(bin_op->left.get()) &&
-                !dynamic_cast<CallExpr*>(bin_op->left.get());
+                !dynamic_cast<CallExpr*>(bin_op->left.get()) &&
+                !(dynamic_cast<UnaryOp*>(bin_op->left.get()) &&
+                  static_cast<UnaryOp*>(bin_op->left.get())->op == "*");
 
             if (needs_parens) output << "(";
             generateExpression(bin_op->left.get());

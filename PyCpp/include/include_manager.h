@@ -32,6 +32,7 @@ private:
         {"random", {"<random>"}},
         {"typeinfo", {"<typeinfo>"}},
         {"type_traits", {"<type_traits>"}},
+        {"cstdint", {"<cstdint>"}},
 
         // Input/Output
         {"print", {"<iostream>"}},

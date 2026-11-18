@@ -1,0 +1,14 @@
+def main() -> int:
+    print("--- Pointer Math ---")
+    
+    x: int = 42
+    ptr: *int = &x
+    
+    unsafe:
+        print(ptr)       # Prints the memory address
+        print(*ptr)      # Dereference to print 42
+        
+        ptr = 99         # <--- Try direct assignment
+        print(x)         # Should print 99 if it works like Odin
+        
+    return 0

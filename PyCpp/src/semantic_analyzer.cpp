@@ -56,6 +56,7 @@ SemanticAnalyzer::SemanticAnalyzer()
     addSymbol("classmethod", "function");
     addSymbol("mem.alloc", "function");
     addSymbol("mem.free", "function");
+    addSymbol("assert", "function");
 }
 
 void SemanticAnalyzer::analyze(std::unique_ptr<Program>& program) {
@@ -123,7 +124,8 @@ bool SemanticAnalyzer::symbolExistsInCurrentScope(const std::string& name) {
 bool SemanticAnalyzer::isValidType(const std::string& type) {
     static const std::unordered_set<std::string> valid_types = {
         "int", "float", "double", "bool", "str", "string", "void", "auto",
-        "std::string"
+        "std::string", "char",
+        "int8_t", "int16_t", "int32_t", "int64_t"
     };
 
     // Check built-in types
@@ -159,29 +161,40 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
     return false;
 }
 
-// Type Compatibility - FIXED
+// Type Compatibility
+static bool isNumericType(const std::string& t) {
+    static const std::unordered_set<std::string> numeric = {
+        "int", "float", "double", "bool", "char",
+        "int8_t", "int16_t", "int32_t", "int64_t"
+    };
+    return numeric.count(t) > 0;
+}
+
 bool SemanticAnalyzer::typesAreCompatible(const std::string& type1, const std::string& type2) {
-    // Basic type compatibility check
     if (type1 == type2) return true;
     if (type1 == "auto" || type2 == "auto") return true;
+    if (type1 == "unknown" || type2 == "unknown") return true;
+    if (generic_params.count(type1) || generic_params.count(type2)) return true;
 
-    // String compatibility - be more flexible
-    if ((type1 == "str" && type2 == "string") ||
-        (type1 == "string" && type2 == "str") ||
-        (type1 == "str" && type2 == "std::string") ||
-        (type1 == "std::string" && type2 == "str") ||
-        (type1 == "string" && type2 == "std::string") ||
-        (type1 == "std::string" && type2 == "string")) {
-        return true;
+    auto isStr = [](const std::string& t) {
+        return t == "str" || t == "string" || t == "std::string";
+    };
+    if (isStr(type1) && isStr(type2)) return true;
+
+    // C++ semantics: arithmetic types convert implicitly
+    if (isNumericType(type1) && isNumericType(type2)) return true;
+
+    // list[T]: compare element types ("std::vector<auto>" matches anything)
+    static const std::string vec = "std::vector<";
+    if (type1.rfind(vec, 0) == 0 && type2.rfind(vec, 0) == 0 &&
+        type1.back() == '>' && type2.back() == '>') {
+        return typesAreCompatible(type1.substr(vec.size(), type1.size() - vec.size() - 1),
+                                  type2.substr(vec.size(), type2.size() - vec.size() - 1));
     }
 
-    // Numeric type conversions
-    if ((type1 == "int" && type2 == "float") ||
-        (type1 == "float" && type2 == "int") ||
-        (type1 == "int" && type2 == "double") ||
-        (type1 == "double" && type2 == "int")) {
-        return true;
-    }
+    // void* converts to any pointer type
+    if ((type1 == "void*" && !type2.empty() && type2.back() == '*') ||
+        (type2 == "void*" && !type1.empty() && type1.back() == '*')) return true;
 
     return false;
 }
@@ -270,16 +283,49 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
         }
         return "std::vector<auto>";
     }
+    else if (auto unary = dynamic_cast<UnaryOp*>(expr)) {
+        std::string inner = getExpressionType(unary->operand.get());
+        if (unary->op == "*") {
+            if (!inner.empty() && inner.back() == '*') return inner.substr(0, inner.size() - 1);
+            return "auto";
+        }
+        if (unary->op == "&") return (inner == "auto" || inner == "unknown") ? "auto" : inner + "*";
+        if (unary->op == "not") return "bool";
+        return inner;
+    }
     else if (auto bin_op = dynamic_cast<BinaryOp*>(expr)) {
-        // For binary operations, return the type of the left operand
+        static const std::unordered_set<std::string> bool_ops = {
+            "<", ">", "<=", ">=", "==", "!=", "and", "or", "is", "is not", "in", "not in"
+        };
+        if (bool_ops.count(bin_op->op)) return "bool";
+        // otherwise the type of the left operand
         return getExpressionType(bin_op->left.get());
     }
     else if (auto call = dynamic_cast<CallExpr*>(expr)) {
+        if (call->is_subscript) { // a[i]
+            std::string container = getExpressionType(call->callee.get());
+            static const std::string vec = "std::vector<";
+            if (container.rfind(vec, 0) == 0 && container.back() == '>')
+                return container.substr(vec.size(), container.size() - vec.size() - 1);
+            if (!container.empty() && container.back() == '*')
+                return container.substr(0, container.size() - 1);
+            return "auto";
+        }
+        if (auto mem = dynamic_cast<MemberAccess*>(call->callee.get())) {
+            auto base = dynamic_cast<Identifier*>(mem->object.get());
+            if (base && base->name == "mem" && mem->member == "alloc" && !call->type_args.empty())
+                return typeToString(call->type_args[0].get()) + "*"; // mem.alloc[T]() -> T*
+            return "auto";
+        }
         if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
-            if (ident->name == "print") return "void";
-            if (ident->name == "len") return "int";
-            if (ident->name == "mem.alloc") return "void*";
-            if (ident->name == "mem.free") return "void";
+            const std::string& n = ident->name;
+            if (n == "print") return "void";
+            if (n == "len") return "int";
+            if (n == "str") return "std::string";
+            if (n == "mem.free") return "void";
+            auto fn = functions.find(n);
+            if (fn != functions.end()) return fn->second.return_type; // user function
+            if (classes.count(n)) return n;                           // constructor
         }
         return "auto";
     }
@@ -360,6 +406,12 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
 
         // Handle regular member access like self.health
         analyzeExpression(member_access->object.get());
+        if (auto obj = dynamic_cast<Identifier*>(member_access->object.get())) {
+            Symbol* sym = findSymbol(obj->name);
+            if (sym && !sym->type.empty() && sym->type.back() == '*' && unsafe_depth == 0)
+                error("Accessing '" + member_access->member + "' through pointer '" + obj->name +
+                    "' requires an 'unsafe:' block", member_access->line, member_access->column);
+        }
 
         // Check if the object is "self" in a class context
         if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
@@ -456,13 +508,24 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             std::string right_type = getExpressionType(bin_op->right.get());
 
             if (!typesAreCompatible(left_type, right_type)) {
-                warning("Type mismatch in binary operation: " + left_type + " vs " + right_type,
-                    bin_op->line, bin_op->column);
+                if (bin_op->op == "=")
+                    error("Cannot assign " + right_type + " to " + left_type, bin_op->line, bin_op->column);
+                else
+                    warning("Type mismatch in binary operation: " + left_type + " vs " + right_type,
+                        bin_op->line, bin_op->column);
             }
         }
     }
     else if (auto call = dynamic_cast<CallExpr*>(expr)) {
         pycpp::debugLog() << "Found function call" << std::endl;
+        if (call->is_subscript && unsafe_depth == 0) {
+            if (auto ptr_ident = dynamic_cast<Identifier*>(call->callee.get())) {
+                Symbol* sym = findSymbol(ptr_ident->name);
+                if (sym && !sym->type.empty() && sym->type.back() == '*')
+                    error("Indexing pointer '" + ptr_ident->name + "' requires an 'unsafe:' block",
+                        call->line, call->column);
+            }
+        }
         analyzeExpression(call->callee.get());
         for (auto& arg : call->arguments) {
             analyzeExpression(arg.get());
@@ -500,6 +563,8 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
     }
     else if (auto unary_op = dynamic_cast<UnaryOp*>(expr)) {
         pycpp::debugLog() << "Found unary operation: " << unary_op->op << std::endl;
+        if (unary_op->op == "*" && unsafe_depth == 0)
+            error("Pointer dereference requires an 'unsafe:' block", unary_op->line, unary_op->column);
         analyzeExpression(unary_op->operand.get());
     }
     else if (auto ternary_op = dynamic_cast<TernaryOp*>(expr)) {
@@ -640,11 +705,13 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
         pycpp::debugLog() << "Found use statement for library: " << use_stmt->library << std::endl;
     }
     else if (auto unsafe_block = dynamic_cast<UnsafeBlock*>(stmt)) {
+        unsafe_depth++;
         enterScope();
-        for (auto& stmt : unsafe_block->body) {
-            analyzeStatement(stmt.get());
+        for (auto& inner : unsafe_block->body) {
+            analyzeStatement(inner.get());
         }
         exitScope();
+        unsafe_depth--;
     }
     else if (auto block = dynamic_cast<Block*>(stmt)) {
         enterScope();
@@ -713,8 +780,8 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
         analyzeExpression(var->value.get());
         std::string expr_type = getExpressionType(var->value.get());
         if (!typesAreCompatible(type_name, expr_type)) {
-            warning("Type mismatch in variable initialization: " + type_name + " vs " + expr_type,
-                var->line, var->column);
+            error("Cannot initialize '" + var->var_name + "' of type " + type_name +
+                " with a value of type " + expr_type, var->line, var->column);
         }
     }
 
@@ -897,6 +964,11 @@ bool SemanticAnalyzer::isValidAssignmentTarget(Expr* expr) {
         return true;
     }
 
+    // Allow pointer dereference (*p = value)
+    if (auto unary = dynamic_cast<UnaryOp*>(expr)) {
+        return unary->op == "*";
+    }
+
     // Allow array subscript (arr[index])
     if (auto call = dynamic_cast<CallExpr*>(expr)) {
         if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
@@ -973,8 +1045,8 @@ void SemanticAnalyzer::analyzeReturnStmt(ReturnStmt* return_stmt) {
             // Check return type compatibility
             std::string return_type = getExpressionType(return_stmt->value.get());
             if (!typesAreCompatible(current_function->return_type, return_type)) {
-                warning("Return type mismatch: " + current_function->return_type + " vs " + return_type,
-                    return_stmt->line, return_stmt->column);
+                error("Return type mismatch: function returns " + current_function->return_type +
+                    " but got " + return_type, return_stmt->line, return_stmt->column);
             }
         }
     }
@@ -1020,9 +1092,11 @@ void SemanticAnalyzer::visit(IfStmt& node) { analyzeIfStmt(&node); }
 void SemanticAnalyzer::visit(WhileStmt& node) { analyzeWhileStmt(&node); }
 void SemanticAnalyzer::visit(ForStmt& node) { analyzeForStmt(&node); }
 void SemanticAnalyzer::visit(UnsafeBlock& node) {
+    unsafe_depth++;
     enterScope();
     for (auto& stmt : node.body) { stmt->accept(*this); }
     exitScope();
+    unsafe_depth--;
 }
 void SemanticAnalyzer::visit(ExprStmt& node) { analyzeExpression(node.expr.get()); }
 void SemanticAnalyzer::visit(Block& node) {

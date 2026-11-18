@@ -38,7 +38,7 @@
       "patterns": [
         {
           "name": "keyword.control.pycpp",
-          "match": "\\b(if|elif|else|for|while|break|continue|return|use|unsafe)\\b"
+          "match": "\\b(if|elif|else|for|while|break|continue|return|assert|use|unsafe)\\b"
         },
         {
           "name": "keyword.operator.pycpp",

@@ -1,0 +1,12 @@
+from player import Player
+
+def main() -> int:
+    print("--- Creating Player ---")
+    hero: Player = Player("Keith", 100)
+    hero.show_status()
+
+    print("--- Taking Damage ---")
+    hero.take_damage(30)
+    hero.show_status()
+
+    return 0

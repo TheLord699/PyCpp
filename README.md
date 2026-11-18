@@ -39,6 +39,7 @@ Supported syntax:
 - `if`, `elif`, `else` — conditional statements.
 - `for`, `while` — loops.
 - `break`, `continue`, `return` — flow control.
+- `assert` — runtime check with an optional message: `assert x > 0, "x must be positive"`. Compiles to C++ `assert` (disabled by `NDEBUG`).
 
 Example:
 
@@ -83,7 +84,7 @@ Additional types:
 - `*T` — pointer to T.
 - `&T` — reference to T.
 
-Type safety is enforced at compile time.
+Type safety is enforced at compile time. Initialising a variable, assigning, or returning a value of an incompatible type is a **compile error** and stops the build. Arithmetic types convert implicitly, exactly as in C++. Suspicious-but-legal code (for example a mismatched operator) produces a warning and does not stop the build.
 
 Type inference may be introduced in a future version.
 
@@ -203,6 +204,20 @@ def main() -> int:
     mem.free(player)
     return 0
 ```
+
+Reading or writing through a pointer, accessing members through a pointer, and indexing a pointer are only allowed inside `unsafe:`. Taking an address (`&x`) and `mem.alloc` / `mem.free` are safe.
+
+```
+def main() -> int:
+    value: int = 42
+    pointer: *int = &value
+    unsafe:
+        *pointer = 100      # write through a pointer
+        *pointer += 1
+    return 0
+```
+
+Dereferencing outside `unsafe:` is a compile error.
 
 Features:
 
@@ -655,7 +670,7 @@ error: line 3:5: syntax error: Expected expression, got: 'return'
 | `--keep-temp`   | Keep the generated `.h`/`.cpp` files and the executable in `temp/`.     |
 | `--no-compile`  | Generate the `.h` and `.cpp` files only.                                |
 
-A syntax error stops the build. The parser never skips a statement it cannot understand.
+Syntax errors and type errors stop the build. The parser never skips a statement it cannot understand.
 
 # **16. Future Development**
 

@@ -224,6 +224,11 @@ bool PyCppParser::isValidAssignmentTarget(Expr* expr) {
         return true;
     }
 
+    // Pointer dereference as a target: *p = value, *p += 1
+    if (auto unary = dynamic_cast<UnaryOp*>(expr)) {
+        return unary->op == "*";
+    }
+
     // Allow array subscript (arr[index])
     if (auto call = dynamic_cast<CallExpr*>(expr)) {
         if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
@@ -484,6 +489,11 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
         advance();
         match(TokenType::NEWLINE);
         return placeholder;
+    }
+
+    // assert cond[, "message"]
+    if (check(TokenType::ASSERT)) {
+        return parseAssertStmt();
     }
 
     // Control flow statements
@@ -2251,4 +2261,32 @@ std::unique_ptr<Expr> PyCppParser::parseTernaryOperator() {
     ternary->column = tokens[position - 1].column;
 
     return ternary;
+}
+
+// assert cond            ->  assert((cond))
+// assert cond, "message" ->  assert((cond) && "message")
+// Lowered to a call of the identifier 'assert', so no new AST node is needed.
+std::unique_ptr<Stmt> PyCppParser::parseAssertStmt() {
+    Token keyword = advance(); // 'assert'
+
+    auto callee = std::make_unique<Identifier>();
+    callee->name = "assert";
+    callee->line = keyword.line;
+    callee->column = keyword.column;
+
+    auto call = std::make_unique<CallExpr>();
+    call->callee = std::move(callee);
+    call->line = keyword.line;
+    call->column = keyword.column;
+    call->arguments.push_back(parseExpression());
+    if (match(TokenType::COMMA)) {
+        call->arguments.push_back(parseExpression());
+    }
+
+    auto stmt = std::make_unique<ExprStmt>();
+    stmt->expr = std::move(call);
+    stmt->line = keyword.line;
+    stmt->column = keyword.column;
+    match(TokenType::NEWLINE);
+    return stmt;
 }

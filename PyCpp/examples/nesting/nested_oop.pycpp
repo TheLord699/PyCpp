@@ -1,0 +1,21 @@
+class NestedTester:
+    def __init__(self, name: str):
+        self.name: str = name
+
+    def run_deep_test(self) -> void:
+        print("--- Testing Nested OOP ---")
+        for i in range(2):
+            if i == 0:
+                print("Outer loop, first pass")
+                self.inner_method(1)
+            else:
+                print("Outer loop, second pass")
+                self.inner_method(2)
+                
+    def inner_method(self, val: int) -> void:
+        if val > 0:
+            print("Positive inner call")
+            if val > 1:
+                print("High value!")
+            else:
+                print("Low value!")

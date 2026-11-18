@@ -1,0 +1,29 @@
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+        self.health: int = 100
+
+    def damage(self, amount: int) -> void:
+        self.health -= amount
+
+def main() -> int:
+    print("--- Allocating Memory ---")
+    
+    # Allocate a Player on the heap
+    hero: *Player = mem.alloc[Player]("Keith")
+    
+    print("Pointer allocated!")
+    
+    # Accessing pointers requires unsafe mode in PyCPP
+    unsafe:
+        print(hero.name)
+        print(hero.health)
+        
+        # Call a method on a pointer
+        hero.damage(40)
+        print(hero.health)
+        
+    print("--- Freeing Memory ---")
+    mem.free(hero)
+    
+    return 0

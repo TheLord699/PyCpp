@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.8)
+﻿cmake_minimum_required(VERSION 3.10)
 project(PyCpp)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -35,6 +35,12 @@ add_executable(PyCpp
 
 # Include directories
 target_include_directories(PyCpp PRIVATE "PyCpp/include")
+
+# --- ADDED FOR STATIC LINKING (Fixes the missing libstdc++-6.dll error) ---
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_options(PyCpp PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
+# --------------------------------------------------------------------------
 
 # Set output name and properties
 set_target_properties(PyCpp PROPERTIES

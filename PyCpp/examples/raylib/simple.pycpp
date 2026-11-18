@@ -1,0 +1,13 @@
+use <raylib.h>
+
+def main() -> int:
+    InitWindow(800, 450, "PyCPP + Raylib!")
+    
+    while WindowShouldClose() == false:
+        BeginDrawing()
+        ClearBackground(RAYWHITE)
+        DrawText("Hello from PyCPP!", 190, 200, 20, LIGHTGRAY)
+        EndDrawing()
+        
+    CloseWindow()
+    return 0

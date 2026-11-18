@@ -418,13 +418,16 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             if (ident->name == "self" && current_class) {
                 // Check if the member exists in the class
                 ClassSymbol& class_sym = classes[current_class->name];
-                if (class_sym.attributes.find(member_access->member) == class_sym.attributes.end()) {
+                if (class_sym.attributes.find(member_access->member) == class_sym.attributes.end() &&
+                    class_sym.methods.find(member_access->member) == class_sym.methods.end()) {
                     warning("Unknown member '" + member_access->member + "' in class '" +
                         current_class->name + "'", member_access->line, member_access->column);
                 }
                 else {
                     pycpp::debugLog() << "Found member access: self." << member_access->member <<
-                        " : " << class_sym.attributes[member_access->member].type << std::endl;
+                        " : " << (class_sym.attributes.count(member_access->member)
+                            ? class_sym.attributes.at(member_access->member).type
+                            : std::string("method")) << std::endl;
                 }
                 return;
             }
@@ -902,6 +905,19 @@ void SemanticAnalyzer::analyzeClass(ClassDef* cls) {
     pycpp::debugLog() << "Analyzing class: " << cls->name << std::endl;
 
     current_class = &classes[cls->name];
+
+    // Register every method first, so calls to methods defined later in the class resolve
+    for (auto& method : cls->methods) {
+        FunctionSymbol method_sym;
+        method_sym.name = method->name;
+        method_sym.return_type = typeToString(method->return_type.get());
+        method_sym.has_return = false;
+        for (const auto& param : method->parameters) {
+            if (param.name == "self") continue;
+            method_sym.parameters.emplace_back(param.name, typeToString(param.type.get()));
+        }
+        current_class->methods[method->name] = method_sym;
+    }
 
     // FIXED: Extract member variables from constructors first
     for (auto& method : cls->methods) {

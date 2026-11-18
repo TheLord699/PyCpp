@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <stdexcept>
 
 // IncludeAnalyzer class definition
 class IncludeAnalyzer : public ASTVisitor {
@@ -2145,7 +2146,92 @@ void CodeGenerator::visit(WhileStmt& node) {
     output << getIndent() << "}\n";
 }
 
+// for i in range(stop) / range(start, stop) / range(start, stop, step) becomes a plain
+// C++ counting loop instead of materialising a std::vector first. As in Python, stop
+// and step are evaluated once, before the loop starts.
+void CodeGenerator::generateRangeLoop(ForStmt& node, CallExpr* call) {
+    auto& args = call->arguments;
+    const std::string var = node.var_name;
+
+    auto literalInt = [](Expr* e, long long& out) {
+        if (auto lit = dynamic_cast<IntLiteral*>(e)) {
+            out = lit->value;
+            return true;
+        }
+        if (auto un = dynamic_cast<UnaryOp*>(e)) {
+            if (un->op == "-") {
+                if (auto lit = dynamic_cast<IntLiteral*>(un->operand.get())) {
+                    out = -static_cast<long long>(lit->value);
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    Expr* start_expr = args.size() >= 2 ? args[0].get() : nullptr;
+    Expr* stop_expr = args.size() >= 2 ? args[1].get() : args[0].get();
+    Expr* step_expr = args.size() == 3 ? args[2].get() : nullptr;
+
+    const std::string start = start_expr ? exprToString(start_expr) : "0";
+    const std::string stop = exprToString(stop_expr);
+
+    long long ignored = 0;
+    const bool stop_is_literal = literalInt(stop_expr, ignored);
+    const std::string end_name = "pycpp_end_" + var;
+    const std::string step_name = "pycpp_step_" + var;
+
+    // A non-literal stop is hoisted so it is evaluated once, as in Python
+    std::string init = "int " + var + " = " + start;
+    if (!stop_is_literal) init += ", " + end_name + " = " + stop;
+    const std::string bound = stop_is_literal ? stop : end_name;
+
+    std::string cond, incr;
+    long long step = 1;
+    if (!step_expr || literalInt(step_expr, step)) {
+        if (step == 0) throw std::runtime_error("range() step must not be zero");
+        if (step > 0) {
+            cond = var + " < " + bound;
+            incr = (step == 1) ? "++" + var : var + " += " + std::to_string(step);
+        }
+        else {
+            cond = var + " > " + bound;
+            incr = (step == -1) ? "--" + var : var + " += " + std::to_string(step);
+        }
+    }
+    else {
+        // Step only known at run time: the direction is decided by its sign
+        init += ", " + step_name + " = " + exprToString(step_expr);
+        cond = "(" + step_name + " > 0 ? " + var + " < " + bound + " : " + var + " > " + bound + ")";
+        incr = var + " += " + step_name;
+    }
+
+    output << getIndent() << "for (" << init << "; " << cond << "; " << incr << ") {\n";
+    indent();
+    pushScope();
+    declareVar(var, nullptr);
+    for (auto& stmt : node.body) {
+        generateStatement(stmt.get());
+    }
+    popScope();
+    dedent();
+    output << getIndent() << "}\n";
+}
+
 void CodeGenerator::visit(ForStmt& node) {
+    // for i in range(...): a counting loop, no temporary vector
+    if (node.var_names.size() <= 1) {
+        if (auto call = dynamic_cast<CallExpr*>(node.iterable.get())) {
+            auto callee = dynamic_cast<Identifier*>(call->callee.get());
+            const size_t argc = call->arguments.size();
+            if (callee && callee->name == "range" && !call->is_subscript &&
+                call->type_args.empty() && !lookupVar("range") && argc >= 1 && argc <= 3) {
+                generateRangeLoop(node, call);
+                return;
+            }
+        }
+    }
+
     pushScope();
     for (const auto& name : node.var_names) declareVar(name, nullptr);
     if (node.var_names.empty()) declareVar(node.var_name, nullptr);

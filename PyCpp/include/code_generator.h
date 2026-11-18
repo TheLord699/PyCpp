@@ -53,6 +53,7 @@ private:
     void generateVarDecl(VarDecl* var);
     void generateType(Type* type);
     void generateExpression(Expr* expr);
+    void generateRangeLoop(ForStmt& node, CallExpr* call);
 
     void generateMemberInitializerList(FunctionDef* constructor, ClassDef* cls);
     void generateConstructorBody(FunctionDef* constructor, ClassDef* cls);

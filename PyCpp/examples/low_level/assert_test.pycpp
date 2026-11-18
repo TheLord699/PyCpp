@@ -1,0 +1,12 @@
+def check_value(val: int) -> void:
+    print("Checking value...")
+    assert val > 10, "Value is too small!"
+    print("Value is valid.")
+
+def main() -> int:
+    print("--- Testing Assert ---")
+    
+    check_value(15) # Should pass
+    check_value(5)  # Should fail and crash the program
+    
+    return 0

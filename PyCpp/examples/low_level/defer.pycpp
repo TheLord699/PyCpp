@@ -1,0 +1,17 @@
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+        self.health: int = 100
+
+    def damage(self, amount: int) -> void:
+        self.health -= amount
+
+def main() -> int:
+    hero: *Player = mem.alloc[Player]("Keith")
+    defer mem.free(hero)    # runs when main() exits, however it exits
+
+    hero.damage(40)
+    print(hero.health)
+
+    print("end of main")
+    return 0

@@ -491,6 +491,9 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
         return placeholder;
     }
 
+    if (check(TokenType::DEFER)) { advance(); return parseDeferStmt(); }
+    if (check(TokenType::MATCH)) { advance(); return parseMatchStmt(); }
+
     // assert cond[, "message"]
     if (check(TokenType::ASSERT)) {
         return parseAssertStmt();
@@ -1691,15 +1694,29 @@ std::unique_ptr<Expr> PyCppParser::createCompoundAssignment(std::unique_ptr<Expr
     return compound_op;
 }
 
+// Python precedence: `not` binds looser than comparisons, tighter than and/or.
+std::unique_ptr<Expr> PyCppParser::parseNot() {
+    if (check(TokenType::NOT)) {
+        Token t = advance();
+        auto u = std::make_unique<UnaryOp>();
+        u->op = "not";
+        u->line = t.line;
+        u->column = t.column;
+        u->operand = parseNot();
+        return u;
+    }
+    return parseComparisonWithIs();
+}
+
 std::unique_ptr<Expr> PyCppParser::parseBooleanOperations() {
-    auto expr = parseComparisonWithIs();
+    auto expr = parseNot();
 
     while (true) {
         if (match(TokenType::AND)) {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "and";
-            op->right = parseComparisonWithIs();
+            op->right = parseNot();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1708,7 +1725,7 @@ std::unique_ptr<Expr> PyCppParser::parseBooleanOperations() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "or";
-            op->right = parseComparisonWithIs();
+            op->right = parseNot();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1755,26 +1772,15 @@ std::unique_ptr<Expr> PyCppParser::parseComparisonWithIs() {
             op->column = tokens[position - 1].column;
             expr = std::move(op);
         }
-        else if (match(TokenType::NOT)) {
-            if (match(TokenType::IN)) {
-                auto op = std::make_unique<BinaryOp>();
-                op->left = std::move(expr);
-                op->op = "not in";
-                op->right = parseComparison();
-                op->line = tokens[position - 2].line; // 'not' token
-                op->column = tokens[position - 2].column;
-                expr = std::move(op);
-            }
-            else {
-                // Unary not operator
-                auto unary = std::make_unique<UnaryOp>();
-                unary->op = "not";
-                unary->operand = parseComparison();
-                unary->line = tokens[position - 1].line;
-                unary->column = tokens[position - 1].column;
-                expr = std::move(unary);
-                break; // Not continues the expression
-            }
+        else if (check(TokenType::NOT) && checkNext(TokenType::IN)) {
+            advance(); advance();                       // not in
+            auto op = std::make_unique<BinaryOp>();
+            op->left = std::move(expr);
+            op->op = "not in";
+            op->right = parseComparison();
+            op->line = tokens[position - 1].line;
+            op->column = tokens[position - 1].column;
+            expr = std::move(op);
         }
         else {
             break;
@@ -2306,4 +2312,63 @@ std::unique_ptr<Stmt> PyCppParser::parseAssertStmt() {
     stmt->column = keyword.column;
     match(TokenType::NEWLINE);
     return stmt;
+}
+
+// defer stmt      |      defer:  <indented block>
+std::unique_ptr<Stmt> PyCppParser::parseDeferStmt() {
+    auto d = std::make_unique<DeferStmt>();
+    d->line = tokens[position - 1].line;
+    d->column = tokens[position - 1].column;
+    if (match(TokenType::COLON)) {
+        consume(TokenType::NEWLINE, "Expected newline after 'defer:'");
+        d->body = parseBlock();
+    }
+    else {
+        auto s = parseStatement();
+        if (!s) throw std::runtime_error("Expected a statement after 'defer'");
+        d->body.push_back(std::move(s));
+    }
+    return d;
+}
+
+// match subject:
+//     case 1 | 2:   ...
+//     case _:       ...
+std::unique_ptr<Stmt> PyCppParser::parseMatchStmt() {
+    auto m = std::make_unique<MatchStmt>();
+    m->line = tokens[position - 1].line;
+    m->column = tokens[position - 1].column;
+    m->subject = parseExpression();
+    consume(TokenType::COLON, "Expected ':' after match subject");
+    consume(TokenType::NEWLINE, "Expected newline after match subject");
+    handleIndentation();
+    if (!check(TokenType::INDENT)) throw std::runtime_error("Expected indented 'case' blocks after 'match'");
+    advance();
+
+    while (!atEnd()) {
+        handleIndentation();
+        if (check(TokenType::DEDENT)) { advance(); break; }
+        if (atEnd()) break;
+
+        MatchCase c;
+        c.line = peek().line;
+        c.column = peek().column;
+        consume(TokenType::CASE, "Expected 'case' inside a match block");
+        do {   // case 1 | 2 | 3:
+            auto pattern = parseUnary();
+            auto id = dynamic_cast<Identifier*>(pattern.get());
+            if (id && id->name == "_") c.is_default = true;
+            else c.patterns.push_back(std::move(pattern));
+        } while (match(TokenType::BITWISE_OR));
+        consume(TokenType::COLON, "Expected ':' after case pattern");
+        if (check(TokenType::NEWLINE)) {
+            advance();
+            c.body = parseBlock();
+        }
+        else if (auto s = parseStatement()) {
+            c.body.push_back(std::move(s));
+        }
+        m->cases.push_back(std::move(c));
+    }
+    return m;
 }

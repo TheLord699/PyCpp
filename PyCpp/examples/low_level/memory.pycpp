@@ -14,16 +14,17 @@ def main() -> int:
     
     print("Pointer allocated!")
     
-    # Accessing pointers requires unsafe mode in PyCPP
-    unsafe:
-        print(hero.name)
-        print(hero.health)
-        
-        # Call a method on a pointer
-        hero.damage(40)
-        print(hero.health)
-        
+    print(hero.name)
+    print(hero.health)
+    
+    # Call a method on a pointer
+    hero.damage(40)
+    print(hero.health)
+    
     print("--- Freeing Memory ---")
     mem.free(hero)
     
     return 0
+
+    # pycpp main.pycpp --compiler gcc --linker-flags "-lraylib -lopengl32 -lgdi32 -lwinmm"
+    # cd "C:\Users\Keith Ainslie\Downloads\CodingProjects\C++Projects\PyCpp\PyCpp\examples\raylib\dodge"

@@ -1,7 +1,40 @@
 #include "../include/log.h"
 #include "../include/semantic_analyzer.h"
+#include "../include/diagnostics.h"
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
+
+// C++ type names -> the names the user wrote (std::vector<std::string> -> list[str])
+static std::string friendlyType(const std::string& t) {
+    struct Rep { const char* from; const char* to; bool opens; };
+    static const Rep reps[] = {
+        {"std::vector<", "list[", true}, {"std::map<", "dict[", true},
+        {"std::string", "str", false},
+        {"int8_t", "i8", false}, {"int16_t", "i16", false},
+        {"int32_t", "i32", false}, {"int64_t", "i64", false},
+    };
+    std::string out;
+    int depth = 0;
+    for (size_t i = 0; i < t.size();) {
+        bool hit = false;
+        for (const auto& r : reps) {
+            const size_t n = std::strlen(r.from);
+            if (t.compare(i, n, r.from) == 0) {
+                out += r.to;
+                if (r.opens) depth++;
+                i += n;
+                hit = true;
+                break;
+            }
+        }
+        if (hit) continue;
+        if (t[i] == '>' && depth > 0) { out += ']'; depth--; }
+        else out += t[i];
+        ++i;
+    }
+    return out;
+}
 
 SemanticAnalyzer::SemanticAnalyzer()
     : current_scope(0), current_function(nullptr), current_class(nullptr) {
@@ -57,6 +90,9 @@ SemanticAnalyzer::SemanticAnalyzer()
     addSymbol("mem.alloc", "function");
     addSymbol("mem.free", "function");
     addSymbol("assert", "function");
+    addSymbol("true", "bool");
+    addSymbol("false", "bool");
+    addSymbol("nullptr", "void*");
 }
 
 void SemanticAnalyzer::analyze(std::unique_ptr<Program>& program) {
@@ -322,6 +358,9 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
             if (n == "print") return "void";
             if (n == "len") return "int";
             if (n == "str") return "std::string";
+            if (n == "int") return "int";
+            if (n == "float") return "float";
+            if (n == "bool") return "bool";
             if (n == "mem.free") return "void";
             auto fn = functions.find(n);
             if (fn != functions.end()) return fn->second.return_type; // user function
@@ -383,7 +422,15 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
 
             // === FIX: Don't error on unknown symbols during import processing ===
             // Just warn and continue - might be resolved by imports
-            warning("Undefined symbol: " + ident->name, ident->line, ident->column);
+            if (!has_cpp_headers) {
+                std::vector<std::string> known;
+                for (auto& scope : scopes) for (auto& kv : scope) known.push_back(kv.first);
+                for (auto& kv : functions) known.push_back(kv.first);
+                for (auto& kv : classes) known.push_back(kv.first);
+                std::string guess = pycpp::closestMatch(ident->name, known);
+                warning("cannot find '" + ident->name + "' in this scope", ident->line, ident->column,
+                    guess.empty() ? std::string() : "did you mean '" + guess + "'?");
+            }
             pycpp::debugLog() << "WARNING: Symbol '" << ident->name << "' not found, but continuing..." << std::endl;
         }
         else {
@@ -413,7 +460,8 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 // Check if the member exists in the class
                 ClassSymbol& class_sym = classes[current_class->name];
                 if (class_sym.attributes.find(member_access->member) == class_sym.attributes.end() &&
-                    class_sym.methods.find(member_access->member) == class_sym.methods.end()) {
+                    class_sym.methods.find(member_access->member) == class_sym.methods.end() &&
+                    current_class->base_class.empty()) {   // the base may live in another module
                     warning("Unknown member '" + member_access->member + "' in class '" +
                         current_class->name + "'", member_access->line, member_access->column);
                 }
@@ -489,7 +537,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             std::string right_type = getExpressionType(bin_op->right.get());
 
             if (!typesAreCompatible(left_type, right_type)) {
-                warning("Type mismatch in compound assignment: " + left_type + " vs " + right_type,
+                warning("mismatched types in compound assignment: " + friendlyType(left_type) + " and " + friendlyType(right_type),
                     bin_op->line, bin_op->column);
             }
 
@@ -506,9 +554,10 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
 
             if (!typesAreCompatible(left_type, right_type)) {
                 if (bin_op->op == "=")
-                    error("Cannot assign " + right_type + " to " + left_type, bin_op->line, bin_op->column);
+                    error("mismatched types: expected " + friendlyType(left_type) + ", found " + friendlyType(right_type),
+                        bin_op->line, bin_op->column, "convert explicitly, e.g. int(x), float(x) or str(x)");
                 else
-                    warning("Type mismatch in binary operation: " + left_type + " vs " + right_type,
+                    warning("mismatched types in '" + bin_op->op + "': " + friendlyType(left_type) + " and " + friendlyType(right_type),
                         bin_op->line, bin_op->column);
             }
         }
@@ -646,6 +695,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
             pycpp::debugLog() << "Found import: " << import->module << std::endl;
         }
         else if (auto use = dynamic_cast<UseStmt*>(stmt.get())) {
+            has_cpp_headers = true;
             pycpp::debugLog() << "Found use statement: " << use->library << std::endl;
         }
     }
@@ -691,6 +741,12 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
         // Use statements are for C++ headers
         pycpp::debugLog() << "Found use statement for library: " << use_stmt->library << std::endl;
     }
+    else if (auto defer_stmt = dynamic_cast<DeferStmt*>(stmt)) {
+        analyzeDeferStmt(defer_stmt);
+    }
+    else if (auto match_stmt = dynamic_cast<MatchStmt*>(stmt)) {
+        analyzeMatchStmt(match_stmt);
+    }
     else if (auto unsafe_block = dynamic_cast<UnsafeBlock*>(stmt)) {
         enterScope();
         for (auto& inner : unsafe_block->body) {
@@ -711,8 +767,9 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
 void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
     std::string type_name = typeToString(var->type.get());
 
-    if (!isValidType(type_name)) {
-        warning("Unknown type: " + type_name, var->line, var->column);
+    if (!isValidType(type_name) && !has_cpp_headers) {
+        warning("unknown type '" + friendlyType(type_name) + "'", var->line, var->column,
+            "declare the class/struct first, or import it with 'from module import Name'");
     }
 
     // For member variables (self.xxx), we need to store them differently
@@ -765,8 +822,9 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
         analyzeExpression(var->value.get());
         std::string expr_type = getExpressionType(var->value.get());
         if (!typesAreCompatible(type_name, expr_type)) {
-            error("Cannot initialize '" + var->var_name + "' of type " + type_name +
-                " with a value of type " + expr_type, var->line, var->column);
+            error("mismatched types: '" + var->var_name + "' is " + friendlyType(type_name) +
+                ", but the value is " + friendlyType(expr_type), var->line, var->column,
+                "convert explicitly, e.g. int(x), float(x) or str(x)");
         }
     }
 
@@ -1043,8 +1101,8 @@ void SemanticAnalyzer::analyzeReturnStmt(ReturnStmt* return_stmt) {
             // Check return type compatibility
             std::string return_type = getExpressionType(return_stmt->value.get());
             if (!typesAreCompatible(current_function->return_type, return_type)) {
-                error("Return type mismatch: function returns " + current_function->return_type +
-                    " but got " + return_type, return_stmt->line, return_stmt->column);
+                error("mismatched return type: function returns " + friendlyType(current_function->return_type) +
+                    " but this returns " + friendlyType(return_type), return_stmt->line, return_stmt->column);
             }
         }
     }
@@ -1066,12 +1124,59 @@ static std::string location(int line, int column) {
     return text + ": ";
 }
 
-void SemanticAnalyzer::error(const std::string& message, int line, int column) {
-    throw std::runtime_error(location(line, column) + "semantic error: " + message); // reported once, by the caller
+void SemanticAnalyzer::error(const std::string& message, int line, int column, const std::string& hint) {
+    pycpp::Diagnostic d;
+    d.message = message; d.line = line; d.column = column; d.hint = hint;
+    throw pycpp::CompileError(d);   // rendered once, by the caller
 }
 
-void SemanticAnalyzer::warning(const std::string& message, int line, int column) {
-    std::cerr << "warning: " << location(line, column) << message << std::endl;
+void SemanticAnalyzer::warning(const std::string& message, int line, int column, const std::string& hint) {
+    pycpp::Diagnostic d;
+    d.severity = pycpp::Severity::Warning;
+    d.message = message; d.line = line; d.column = column; d.hint = hint;
+    pycpp::emit(d);
+}
+
+void SemanticAnalyzer::analyzeDeferStmt(DeferStmt* d) {
+    if (!current_function)
+        error("'defer' can only be used inside a function", d->line, d->column,
+              "defer schedules cleanup for when the enclosing scope exits");
+    for (auto& s : d->body) {
+        if (dynamic_cast<ReturnStmt*>(s.get()) || dynamic_cast<BreakStmt*>(s.get()) ||
+            dynamic_cast<ContinueStmt*>(s.get()))
+            error("'return', 'break' and 'continue' are not allowed inside a defer block", s->line, s->column);
+    }
+    enterScope();
+    for (auto& s : d->body) analyzeStatement(s.get());
+    exitScope();
+}
+
+void SemanticAnalyzer::analyzeMatchStmt(MatchStmt* m) {
+    analyzeExpression(m->subject.get());
+    const std::string subject_type = getExpressionType(m->subject.get());
+    std::unordered_set<std::string> seen;
+    bool saw_default = false;
+    for (auto& c : m->cases) {
+        if (saw_default)
+            error("this case can never match because 'case _' already catches everything", c.line, c.column,
+                  "move 'case _' to the end of the match block");
+        if (c.is_default) saw_default = true;
+        for (auto& p : c.patterns) {
+            analyzeExpression(p.get());
+            const std::string pt = getExpressionType(p.get());
+            if (!typesAreCompatible(subject_type, pt))
+                error("cannot match a value of type " + friendlyType(subject_type) +
+                      " against a " + friendlyType(pt) + " pattern", p->line, p->column);
+            std::string key;
+            if (auto i = dynamic_cast<IntLiteral*>(p.get())) key = "i" + std::to_string(i->value);
+            else if (auto s = dynamic_cast<StringLiteral*>(p.get())) key = "s" + s->value;
+            if (!key.empty() && !seen.insert(key).second)
+                error("duplicate case pattern", p->line, p->column, "each value can appear in only one case");
+        }
+        enterScope();
+        for (auto& s : c.body) analyzeStatement(s.get());
+        exitScope();
+    }
 }
 
 // Visitor pattern implementations (delegate to analysis methods)

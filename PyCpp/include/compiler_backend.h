@@ -18,6 +18,7 @@ struct CompileRequest {
     std::string exeFile;               // output executable path
     std::string includeDir;            // directory holding the generated headers
     std::string linkerFlags;
+    bool optimize = false;         // -O2 / /O2 (used by --build)
 };
 
 class CompilerBackend {

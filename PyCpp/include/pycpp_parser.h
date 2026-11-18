@@ -72,6 +72,8 @@ public:
     std::unique_ptr<BreakStmt> parseBreakStmt();
     std::unique_ptr<ContinueStmt> parseContinueStmt();
     std::unique_ptr<Stmt> parseAssertStmt();
+    std::unique_ptr<Stmt> parseDeferStmt();
+    std::unique_ptr<Stmt> parseMatchStmt();
 
     // Import and use statements
     std::unique_ptr<ImportStmt> parseImportStmt();
@@ -87,6 +89,7 @@ public:
     std::unique_ptr<Expr> parseExpression();
     std::unique_ptr<Expr> parseAssignment();
     std::unique_ptr<Expr> parseBooleanOperations();
+    std::unique_ptr<Expr> parseNot();
     std::unique_ptr<Expr> parseComparisonWithIs();
     std::unique_ptr<Expr> parseComparison();
     std::unique_ptr<Expr> parseTerm();

@@ -59,10 +59,10 @@ Token Lexer::readNumber() {
 }
 
 Token Lexer::readString() {
-    char quote = advance(); // Skip opening quote
-    std::string str;
     int start_line = line;
     int start_column = column;
+    char quote = advance(); // Skip opening quote
+    std::string str;
 
     while (peek() != quote && peek() != '\0') {
         if (peek() == '\\') {
@@ -132,6 +132,9 @@ Token Lexer::readIdentifier() {
         {"constexpr", TokenType::CONSTEXPR},
         {"unsafe", TokenType::UNSAFE},
         {"lambda", TokenType::LAMBDA},
+        {"defer", TokenType::DEFER},
+        {"match", TokenType::MATCH},
+        {"case", TokenType::CASE},
 
         // Boolean operators
         {"and", TokenType::AND},
@@ -320,9 +323,9 @@ Token Lexer::readIdentifier() {
 }
 
 Token Lexer::readOperator() {
-    char c = advance();
     int start_line = line;
     int start_column = column;
+    char c = advance();
 
     switch (c) {
     case '+':
@@ -472,7 +475,7 @@ Token Lexer::readOperator() {
             advance();
             return Token(TokenType::NOT_EQUAL, "!=", start_line, start_column);
         }
-        return Token(TokenType::UNKNOWN, "!", start_line, start_column);
+        return Token(TokenType::NOT, "!", start_line, start_column);
 
     case ':':
         if (peek() == '=') {

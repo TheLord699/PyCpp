@@ -44,6 +44,7 @@ private:
     std::unordered_map<std::string, FunctionSymbol> functions;
     std::unordered_map<std::string, ClassSymbol> classes;
     std::unordered_set<std::string> generic_params; // type parameters such as T from def f[T] / class C[T]
+    bool has_cpp_headers = false;  // a `use <header>` is present: C++ names are not ours to check
 
     // Current context
     int current_scope;
@@ -80,6 +81,9 @@ private:
     void analyzeForStmt(ForStmt* for_stmt);
     void analyzeReturnStmt(ReturnStmt* return_stmt);
 
+    void analyzeDeferStmt(DeferStmt* d);
+    void analyzeMatchStmt(MatchStmt* m);
+
     // NEW: Import statement analysis
     void analyzeImportStmt(ImportStmt* import);
 
@@ -90,8 +94,8 @@ private:
     void trackBuiltinUsage(const std::string& builtin);
 
     // Error reporting
-    void error(const std::string& message, int line, int column);
-    void warning(const std::string& message, int line, int column);
+    void error(const std::string& message, int line, int column, const std::string& hint = "");
+    void warning(const std::string& message, int line, int column, const std::string& hint = "");
 
 public:
     SemanticAnalyzer();

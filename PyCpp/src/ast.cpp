@@ -164,3 +164,11 @@ void ImportStmt::accept(ASTVisitor& visitor) {
 void UseStmt::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }
+
+void MatchStmt::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+void DeferStmt::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}

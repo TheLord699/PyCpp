@@ -10,6 +10,14 @@
 #include <string>
 #include <vector>
 
+namespace pycpp {
+// Filled for every module before any code is generated, so a class can know the
+// members its ancestors declare (even when the base lives in another module).
+void registerClasses(Program* program);
+bool isInheritedMember(const std::string& class_name, const std::string& member);
+bool hasSubclasses(const std::string& class_name);
+}
+
 class CodeGenerator : public ASTVisitor {
 private:
     std::ostringstream output;
@@ -23,6 +31,9 @@ private:
     std::vector<std::map<std::string, Type*>> scopes;
     bool header_mode = false;   // true: emit declarations for the .h file
     bool needs_utility = false; // set when generated code uses std::move
+    int defer_counter = 0, match_counter = 0;
+    bool class_is_polymorphic = false;
+    void useRuntime();          // generated code needs pycpp_runtime.h
 
     void pushScope();
     void popScope();
@@ -90,6 +101,8 @@ public:
     void visit(Block& node) override;
     void visit(ImportStmt& node) override;
     void visit(UseStmt& node) override;
+    void visit(DeferStmt& node) override;
+    void visit(MatchStmt& node) override;
 
     void visit(IntLiteral& node) override;
     void visit(FloatLiteral& node) override;

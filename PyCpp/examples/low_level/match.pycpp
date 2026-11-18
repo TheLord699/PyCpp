@@ -1,0 +1,23 @@
+def describe(code: int) -> void:
+    match code:
+        case 1:
+            print("one")
+        case 2 | 3:
+            print("two or three")
+        case _:
+            print("something else")
+
+def greet(name: str) -> void:
+    match name:
+        case "Keith":
+            print("Hello, boss")
+        case _:
+            print("Hello, stranger")
+
+def main() -> int:
+    describe(1)
+    describe(3)
+    describe(42)
+    greet("Keith")
+    greet("Sam")
+    return 0

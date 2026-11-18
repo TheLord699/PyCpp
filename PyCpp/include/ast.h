@@ -44,6 +44,8 @@ class TemplateDef;
 class ConstexprDef;
 class ImportStmt;
 class UseStmt;
+class MatchStmt;
+class DeferStmt;
 
 // Base AST Node
 class ASTNode {
@@ -321,6 +323,26 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+struct MatchCase {
+    std::vector<std::unique_ptr<Expr>> patterns;   // empty when is_default
+    bool is_default = false;                       // `case _:`
+    std::vector<std::unique_ptr<Stmt>> body;
+    int line = 0, column = 0;
+};
+
+class MatchStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> subject;
+    std::vector<MatchCase> cases;
+    void accept(ASTVisitor& visitor) override;
+};
+
+class DeferStmt : public Stmt {
+public:
+    std::vector<std::unique_ptr<Stmt>> body;
+    void accept(ASTVisitor& visitor) override;
+};
+
 class Program : public ASTNode {
 public:
     std::vector<std::unique_ptr<Stmt>> statements;
@@ -375,6 +397,10 @@ public:
     virtual void visit(ConstexprDef& node) = 0;
     virtual void visit(ImportStmt& node) = 0;
     virtual void visit(UseStmt& node) = 0;
+
+    // Non-pure so visitors that don't care keep compiling
+    virtual void visit(MatchStmt&) {}
+    virtual void visit(DeferStmt&) {}
 };
 
 #endif

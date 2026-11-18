@@ -29,6 +29,8 @@
 #include "../include/import_resolver.h"
 #include "../include/compiler_backend.h"
 #include "../include/log.h"
+#include "../include/pycpp_runtime_text.h"
+#include "../include/diagnostics.h"
 
 // Terminal output formatting
 class TerminalFormatter {
@@ -100,6 +102,18 @@ public:
     }
 };
 
+// Render a failure: structured errors get a code frame, everything else a plain line.
+static void reportFailure(const std::exception& e) {
+    if (auto ce = dynamic_cast<const pycpp::CompileError*>(&e)) {
+        for (const auto& d : ce->diagnostics) pycpp::emit(d);
+        const size_t n = ce->diagnostics.size();
+        std::cerr << "error: could not compile due to " << n << (n == 1 ? " error" : " errors") << "\n";
+    }
+    else {
+        std::cerr << "error: " << e.what() << "\n";
+    }
+}
+
 // Helper function to clean up .obj files in a specific directory
 void cleanupObjectFiles(const std::filesystem::path& directory, bool verbose = false) {
     try {
@@ -167,7 +181,7 @@ void generateHeaderAndImplementation(std::unique_ptr<Program>& ast,
     // prototypes of every function the source file defines.
     std::string guard_name = std::filesystem::path(base_filename).filename().string();
     for (char& c : guard_name) c = std::isalnum(static_cast<unsigned char>(c)) ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : '_';
-    guard_name += "_H";
+    guard_name = "PYCPP_" + guard_name + "_H";
 
     CodeGenerator header_gen;
     std::string header_content = header_gen.generateHeader(ast, include_manager, guard_name);
@@ -197,46 +211,44 @@ void generateHeaderAndImplementation(std::unique_ptr<Program>& ast,
     cpp_file.close();
 
     TerminalFormatter::printFile("Generated implementation: " + cpp_filename);
+
+    if (include_manager.isHeaderIncluded("\"pycpp_runtime.h\"")) {
+        writeRuntimeHeader(std::filesystem::path(base_filename).parent_path());
+    }
     TerminalFormatter::printSuccess("Total files generated: 2");
 }
 
-// Generate multiple files for multi-file compilation
+// Read, lex, parse and analyze one module.
+std::unique_ptr<Program> loadModule(const std::string& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot open '" + file + "'");
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (src.size() >= 3 && (unsigned char)src[0] == 0xEF && (unsigned char)src[1] == 0xBB && (unsigned char)src[2] == 0xBF)
+        src.erase(0, 3);
+    pycpp::setSource(file, src);            // for the code frames in diagnostics
+    Lexer lexer(src);
+    PyCppParser parser(lexer.tokenize());
+    auto ast = parser.parse();
+    SemanticAnalyzer analyzer;
+    analyzer.analyze(ast);
+    return ast;
+}
+
+// Generate multiple files for multi-file compilation.
+// All modules are parsed and registered first, so a class can see the members of a
+// base class that lives in another module.
 void generateMultiFileOutput(const std::vector<std::string>& files, const std::string& tempDir, bool verbose) {
+    std::vector<std::pair<std::string, std::unique_ptr<Program>>> modules;
     for (const auto& file : files) {
         if (verbose) TerminalFormatter::printInfo("Processing: " + file);
-
-        std::ifstream infile(file);
-        if (!infile.is_open()) {
-            TerminalFormatter::printError("Cannot open file '" + file + "'");
-            continue;
-        }
-
-        std::string sourceCode((std::istreambuf_iterator<char>(infile)), std::istreambuf_iterator<char>());
-        infile.close();
-
-        // Remove BOM if present
-        if (sourceCode.length() >= 3 &&
-            static_cast<unsigned char>(sourceCode[0]) == 0xEF &&
-            static_cast<unsigned char>(sourceCode[1]) == 0xBB &&
-            static_cast<unsigned char>(sourceCode[2]) == 0xBF) {
-            sourceCode = sourceCode.substr(3);
-        }
-
-        Lexer lexer(sourceCode);
-        auto tokens = lexer.tokenize();
-
-        PyCppParser parser(tokens);
-        auto ast = parser.parse();
-
-        SemanticAnalyzer analyzer;
-        analyzer.analyze(ast);
-
-        // Generate output filename from input filename
-        std::filesystem::path filePath(file);
-        std::string moduleName = filePath.stem().string(); // Remove extension
-
+        auto ast = loadModule(file);
+        pycpp::registerClasses(ast.get());
+        modules.emplace_back(file, std::move(ast));
+    }
+    for (auto& [file, ast] : modules) {
         IncludeManager include_manager;
-        generateHeaderAndImplementation(ast, (std::filesystem::path(tempDir) / moduleName).string(), include_manager);
+        generateHeaderAndImplementation(ast,
+            (std::filesystem::path(tempDir) / std::filesystem::path(file).stem()).string(), include_manager);
     }
 }
 
@@ -248,6 +260,7 @@ void printUsage(const std::string& programName) {
     std::cout << "  -h, --help       Show this help message\n";
     std::cout << "  -v, --verbose    Enable verbose output\n";
     std::cout << "  --keep-temp      Keep temporary compilation files\n";
+    std::cout << "  -b, --build      Build an optimized executable next to the source, don't run it\n";
     std::cout << "  --no-compile     Only generate .h and .cpp files, don't compile\n";
     std::cout << "  --single-file    Compile only the specified file (no auto-deps)\n";
     std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, msvc or auto\n";
@@ -267,11 +280,49 @@ void printUsage(const std::string& programName) {
     std::cout << "  " << programName << " game.pycpp --linker-flags \"-lraylib -lopengl32 -lgdi32 -lwinmm\"  # Link external libraries\n"; // --- ADDED ---
 }
 
+// Turn raw C++ compiler output into one short PyCPP diagnostic. The C++ output itself
+// is only shown with --verbose.
+static void explainBuildFailure(const std::vector<std::string>& log, const std::string& tempDir) {
+    pycpp::Diagnostic d;
+    for (const auto& line : log) {
+        size_t p;
+        if ((p = line.find("undefined reference to `")) != std::string::npos) {
+            size_t s = p + 24, e = line.find('\'', s);
+            d.message = "linking failed: cannot find '" + line.substr(s, e == std::string::npos ? std::string::npos : e - s) + "'";
+        }
+        else if ((p = line.find("unresolved external symbol ")) != std::string::npos) {
+            size_t s = p + 27, e = line.find(" referenced", s);
+            d.message = "linking failed: cannot find " + line.substr(s, e == std::string::npos ? std::string::npos : e - s);
+        }
+        if (!d.message.empty()) {
+            d.hint = "the library that defines it isn't linked, pass it with --linker-flags \"-l<name>\"";
+            break;
+        }
+        if ((p = line.find("fatal error: ")) != std::string::npos && line.find("No such file") != std::string::npos) {
+            size_t s = p + 13;
+            d.message = "cannot find C++ header '" + line.substr(s, line.find(':', s) - s) + "'";
+            d.hint = "check the name in your `use <...>` line and that the library is installed";
+            break;
+        }
+        if ((p = line.find("C1083")) != std::string::npos) {
+            d.message = "cannot find a C++ header: " + line.substr(p + 7);
+            d.hint = "check your `use <...>` lines and that the library is installed";
+            break;
+        }
+    }
+    if (d.message.empty()) {
+        d.message = "the generated C++ failed to compile";
+        d.hint = "this is a PyCPP bug or an unsupported construct. Re-run with --verbose to see the "
+                 "C++ compiler output, or --keep-temp to inspect " + tempDir;
+    }
+    pycpp::emit(d);
+}
+
 // Compile the generated C++ with the selected compiler, then run the result.
 // Returns true when the program was built and started.
 bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles,
     const std::string& exeFile, const std::string& includeDir, bool verbose,
-    const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
+    const std::string& linkerFlags, bool buildOnly = false) {
     std::string reason;
     if (!CompilerBackend::isAvailable(compiler, reason)) {
         TerminalFormatter::printError(reason);
@@ -283,20 +334,29 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
     request.exeFile = exeFile;
     request.includeDir = includeDir;
     request.linkerFlags = linkerFlags; // --- ADDED ---
+    request.optimize = buildOnly;
 
     TerminalFormatter::printCompile("Compiling with " + CompilerBackend::displayName(compiler) + "...");
     for (const auto& file : cppFiles) {
         TerminalFormatter::printFilename(std::filesystem::path(file).filename().string());
     }
 
-    bool built = CompilerBackend::compile(compiler, request, verbose, [](const std::string& line) {
-        if (!line.empty()) TerminalFormatter::printCompilerOutput(line + "\n");
+    std::vector<std::string> log;
+    bool built = CompilerBackend::compile(compiler, request, verbose, [&](const std::string& line) {
+        log.push_back(line);
+        if (verbose && !line.empty()) TerminalFormatter::printCompilerOutput(line + "\n");
     });
     cleanupStrayObjectFiles(verbose);
 
     if (!built) {
+        if (!verbose) explainBuildFailure(log, includeDir);   // never dump raw C++ errors
         TerminalFormatter::printError("Compilation failed");
         return false;
+    }
+
+    if (buildOnly) {
+        TerminalFormatter::printResult("Built " + exeFile);
+        return true;
     }
 
     TerminalFormatter::printRunning(exeFile);
@@ -315,7 +375,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
 // Multi-file compilation with automatic dependency resolution (DEFAULT)
 bool compileMultiFile(const std::string& inputFile, const std::string& outputBase,
     const std::vector<std::string>& importPaths, bool verbose, bool keepTemp, bool noCompile,
-    CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
+    CompilerKind compiler, const std::string& linkerFlags, bool buildOnly = false) {
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -370,9 +430,11 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
 
         // The executable lives in the temp directory, named after the output base
         const std::string outputName = std::filesystem::path(outputBase).filename().string();
-        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
+        std::string exeFile = buildOnly
+            ? outputBase + CompilerBackend::exeExtension(compiler)    // --build: leave it next to the source
+            : (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose, linkerFlags); // --- ADDED linkerFlags ---
+        bool compilationSuccess = buildAndRun(compiler, cppFiles, exeFile, tempDir.string(), verbose, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
 
         if (!compilationSuccess) {
             TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
@@ -389,7 +451,8 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
                     std::filesystem::remove(tempDir / (moduleName + ".cpp"));
                     std::filesystem::remove(tempDir / (moduleName + ".h"));
                 }
-                std::filesystem::remove(exeFile);
+                if (!buildOnly) std::filesystem::remove(exeFile);
+                std::filesystem::remove(tempDir / "pycpp_runtime.h");
 
                 // Clean up .obj files
                 cleanupObjectFiles(tempDir, verbose);
@@ -412,14 +475,14 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         return true;
     }
     catch (const std::exception& e) {
-        TerminalFormatter::printError(e.what());
+        reportFailure(e);
         return false;
     }
 }
 
 // Single-file compilation (optional with --single-file flag)
 bool compileSingleFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp,
-    CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
+    CompilerKind compiler, const std::string& linkerFlags, bool buildOnly = false) {
     try {
         std::filesystem::path inputPath(inputFile);
         std::filesystem::path inputDir = inputPath.parent_path();
@@ -447,6 +510,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
             if (verbose) TerminalFormatter::printInfo("Removed UTF-8 BOM");
         }
 
+        pycpp::setSource(inputFile, sourceCode);
         Lexer lexer(sourceCode);
         auto tokens = lexer.tokenize();
 
@@ -459,12 +523,15 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         const std::string outputName = std::filesystem::path(outputBase).filename().string();
 
         IncludeManager include_manager;
+        pycpp::registerClasses(ast.get());
         generateHeaderAndImplementation(ast, (tempDir / outputName).string(), include_manager);
 
         std::string cppFile = (tempDir / (outputName + ".cpp")).string();
-        std::string exeFile = (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
+        std::string exeFile = buildOnly
+            ? outputBase + CompilerBackend::exeExtension(compiler)    // --build: leave it next to the source
+            : (tempDir / (outputName + CompilerBackend::exeExtension(compiler))).string();
 
-        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose, linkerFlags); // --- ADDED linkerFlags ---
+        bool compilationSuccess = buildAndRun(compiler, { cppFile }, exeFile, tempDir.string(), verbose, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
 
         if (!compilationSuccess) {
             TerminalFormatter::printNote("generated files were kept in " + tempDir.string());
@@ -475,7 +542,8 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
             try {
                 std::filesystem::remove(cppFile);
                 std::filesystem::remove(tempDir / (outputName + ".h"));
-                std::filesystem::remove(exeFile);
+                if (!buildOnly) std::filesystem::remove(exeFile);
+                std::filesystem::remove(tempDir / "pycpp_runtime.h");
 
                 // Clean up .obj files
                 cleanupObjectFiles(tempDir, verbose);
@@ -497,12 +565,12 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
         return true;
     }
     catch (const std::exception& e) {
-        TerminalFormatter::printError(e.what());
+        reportFailure(e);
         return false;
     }
 }
 
-bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler, const std::string& linkerFlags) { // --- ADDED linkerFlags PARAM ---
+bool compileFile(const std::string& inputFile, const std::string& outputBase, bool verbose, bool keepTemp, bool noCompile, bool singleFile, const std::vector<std::string>& importPaths, CompilerKind compiler, const std::string& linkerFlags, bool buildOnly = false) {
     if (noCompile) {
         try {
             std::ifstream file(inputFile);
@@ -521,7 +589,8 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
                 sourceCode = sourceCode.substr(3);
             }
 
-            Lexer lexer(sourceCode);
+            pycpp::setSource(inputFile, sourceCode);
+        Lexer lexer(sourceCode);
             auto tokens = lexer.tokenize();
 
             PyCppParser parser(tokens);
@@ -531,23 +600,24 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
             analyzer.analyze(ast);
 
             IncludeManager include_manager;
+            pycpp::registerClasses(ast.get());
             generateHeaderAndImplementation(ast, outputBase, include_manager);
 
             TerminalFormatter::printResult("Generated " + outputBase + ".h and " + outputBase + ".cpp");
             return true;
         }
         catch (const std::exception& e) {
-            TerminalFormatter::printError(e.what());
+            reportFailure(e);
             return false;
         }
     }
     else if (singleFile) {
         // Use single-file compilation only when explicitly requested
-        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler, linkerFlags); // --- ADDED linkerFlags ---
+        return compileSingleFile(inputFile, outputBase, verbose, keepTemp, compiler, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
     }
     else {
         // DEFAULT: Use multi-file compilation with auto-dependency resolution
-        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler, linkerFlags); // --- ADDED linkerFlags ---
+        return compileMultiFile(inputFile, outputBase, importPaths, verbose, keepTemp, noCompile, compiler, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
     }
 }
 
@@ -563,6 +633,7 @@ int main(int argc, char* argv[]) {
     bool keepTemp = false;
     bool noCompile = false;
     bool singleFile = false;  // Default is multi-file compilation
+    bool buildOnly = false;   // -b / --build
     CompilerKind requestedCompiler = CompilerKind::Auto;
     std::vector<std::string> importPaths;
     std::string linkerFlags; // --- ADDED ---
@@ -579,6 +650,9 @@ int main(int argc, char* argv[]) {
         }
         else if (arg == "--keep-temp") {
             keepTemp = true;
+        }
+        else if (arg == "-b" || arg == "--build") {
+            buildOnly = true;
         }
         else if (arg == "--no-compile") {
             noCompile = true;
@@ -674,6 +748,6 @@ int main(int argc, char* argv[]) {
         TerminalFormatter::printInfo("Compiler: " + CompilerBackend::displayName(compiler));
     }
 
-    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler, linkerFlags); // --- ADDED linkerFlags ---
+    bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
     return success ? 0 : 1;
 }

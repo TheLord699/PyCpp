@@ -10,6 +10,61 @@
 #include <numeric>
 #include <stdexcept>
 
+// ---- Class registry (inheritance across modules) ----
+namespace {
+struct ClassInfo { std::string base; std::set<std::string> members; };
+std::map<std::string, ClassInfo>& classRegistry() {
+    static std::map<std::string, ClassInfo> registry;
+    return registry;
+}
+std::string selfMemberAssigned(Stmt* stmt) {
+    if (auto v = dynamic_cast<VarDecl*>(stmt))
+        return v->var_name.rfind("self.", 0) == 0 ? v->var_name.substr(5) : "";
+    if (auto es = dynamic_cast<ExprStmt*>(stmt))
+        if (auto bin = dynamic_cast<BinaryOp*>(es->expr.get()); bin && bin->op == "=")
+            if (auto m = dynamic_cast<MemberAccess*>(bin->left.get()))
+                if (auto id = dynamic_cast<Identifier*>(m->object.get()); id && id->name == "self")
+                    return m->member;
+    return "";
+}
+}
+
+void pycpp::registerClasses(Program* program) {
+    for (auto& stmt : program->statements) {
+        auto cls = dynamic_cast<ClassDef*>(stmt.get());
+        if (!cls) continue;
+        ClassInfo& info = classRegistry()[cls->name];
+        info.base = cls->base_class;
+        for (auto& attr : cls->attributes) {
+            std::string n = attr->var_name;
+            if (n.rfind("self.", 0) == 0) n = n.substr(5);
+            info.members.insert(n);
+        }
+        for (auto& m : cls->methods) {
+            if (m->name != "__init__") continue;
+            for (auto& s : m->body) {
+                std::string n = selfMemberAssigned(s.get());
+                if (!n.empty()) info.members.insert(n);
+            }
+        }
+    }
+}
+
+bool pycpp::isInheritedMember(const std::string& cls, const std::string& member) {
+    auto& reg = classRegistry();
+    auto it = reg.find(cls);
+    for (int depth = 0; it != reg.end() && !it->second.base.empty() && depth < 64; ++depth) {
+        it = reg.find(it->second.base);
+        if (it != reg.end() && it->second.members.count(member)) return true;
+    }
+    return false;
+}
+
+bool pycpp::hasSubclasses(const std::string& cls) {
+    for (auto& entry : classRegistry()) if (entry.second.base == cls) return true;
+    return false;
+}
+
 // IncludeAnalyzer class definition
 class IncludeAnalyzer : public ASTVisitor {
 private:
@@ -223,6 +278,11 @@ public:
     }
 
     void visit(UseStmt& node) override {}
+    void visit(DeferStmt& n) override { for (auto& s : n.body) s->accept(*this); }
+    void visit(MatchStmt& n) override {
+        if (n.subject) n.subject->accept(*this);
+        for (auto& c : n.cases) for (auto& s : c.body) s->accept(*this);
+    }
 };
 
 // CodeGenerator implementation
@@ -234,6 +294,10 @@ CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), cur
 }
 
 // ---- Scoped variable types ----
+
+void CodeGenerator::useRuntime() {
+    if (includes) includes->trackManualInclude("\"pycpp_runtime.h\"");
+}
 
 void CodeGenerator::pushScope() { scopes.emplace_back(); }
 
@@ -620,6 +684,8 @@ void CodeGenerator::collectConstructorInitializers(FunctionDef* ctor,
             break;
         }
 
+        // inherited members can't go in this class's initializer list
+        if (current_class && pycpp::isInheritedMember(current_class->name, member)) break;
         if (usesSelf(value) || seen.count(member)) break;
         seen.insert(member);
 
@@ -672,6 +738,7 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
 
     generateTemplateHeader(func->type_params);
     output << getIndent();
+    if (current_class && class_is_polymorphic && !is_constructor && !is_generic) output << "virtual ";
 
     if (is_constructor) {
         output << current_class->name; // constructors take the class name
@@ -853,6 +920,8 @@ void CodeGenerator::generateClass(ClassDef* cls) {
     current_class = cls;
 
     generateTemplateHeader(cls->type_params);
+    const bool saved_poly = class_is_polymorphic;
+    class_is_polymorphic = !cls->base_class.empty() || pycpp::hasSubclasses(cls->name);
     output << getIndent() << "class " << cls->name;
 
     if (!cls->base_class.empty()) {
@@ -880,6 +949,9 @@ void CodeGenerator::generateClass(ClassDef* cls) {
             member_name = member_name.substr(5); // Remove "self." prefix
         }
 
+        // already declared by a base class: redeclaring would shadow it
+        if (pycpp::isInheritedMember(cls->name, member_name)) continue;
+
         output << getIndent();
         generateType(attr->type.get());
         output << " " << member_name;
@@ -892,6 +964,9 @@ void CodeGenerator::generateClass(ClassDef* cls) {
         }
         output << ";\n";
     }
+
+    if (pycpp::hasSubclasses(cls->name))
+        output << getIndent() << "virtual ~" << cls->name << "() = default;\n";
 
     // Generate methods, separated by blank lines
     bool first_method = true;
@@ -909,6 +984,7 @@ void CodeGenerator::generateClass(ClassDef* cls) {
     dedent();
     output << getIndent() << "};\n";
 
+    class_is_polymorphic = saved_poly;
     current_class = previous_class;
 }
 
@@ -958,38 +1034,22 @@ void CodeGenerator::generateVarDecl(VarDecl* var) {
         if (var->value) {
             output << " = ";
 
-            // Handle type conversions for built-in functions
+            // `x: int = input(...)`: convert the entered text to the declared type
             if (auto call_expr = dynamic_cast<CallExpr*>(var->value.get())) {
                 if (auto ident = dynamic_cast<Identifier*>(call_expr->callee.get())) {
-                    std::string func_name = ident->name;
-
-                    // If the function returns a different type than the variable declaration,
-                    // we may need explicit conversion
-                    if (var->type) {
-                        if (auto basic_type = dynamic_cast<BasicType*>(var->type.get())) {
-                            // input() returns string, but variable might be int/float/etc.
-                            if (func_name == "input") {
-                                if (basic_type->name == "int" || basic_type->name == "i32" || basic_type->name == "i64") {
-                                    output << "std::stoi(";
-                                    generateExpression(var->value.get());
-                                    output << ")";
-                                }
-                                else if (basic_type->name == "float" || basic_type->name == "f32" || basic_type->name == "f64" || basic_type->name == "double") {
-                                    output << "std::stof(";
-                                    generateExpression(var->value.get());
-                                    output << ")";
-                                }
-                                else if (basic_type->name == "bool") {
-                                    output << "(";
-                                    generateExpression(var->value.get());
-                                    output << " == \"true\" || ";
-                                    generateExpression(var->value.get());
-                                    output << " == \"1\")";
-                                }
-                                else {
-                                    generateExpression(var->value.get());
-                                }
-                                output << ";\n";
+                    if (ident->name == "input" && var->type) {
+                        if (auto basic = dynamic_cast<BasicType*>(var->type.get())) {
+                            static const std::set<std::string> ints = { "int", "int8_t", "int16_t", "int32_t", "int64_t" };
+                            std::string conv;
+                            if (ints.count(basic->name)) conv = "pycpp::to_int<" + basic->name + ">";
+                            else if (basic->name == "float") conv = "pycpp::to_float";
+                            else if (basic->name == "double") conv = "pycpp::to_double";
+                            else if (basic->name == "bool") conv = "pycpp::parse_bool";
+                            if (!conv.empty()) {
+                                useRuntime();
+                                output << conv << "(";
+                                generateExpression(var->value.get());   // input() runs exactly once
+                                output << ");\n";
                                 return;
                             }
                         }
@@ -1208,48 +1268,20 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
-        else if (function_name == "int") {
-            if (call_expr->arguments.size() > 0) {
-                output << "static_cast<int>(";
-                generateExpression(call_expr->arguments[0].get());
-                output << ")";
+        else if (function_name == "int" || function_name == "float" ||
+                 function_name == "str" || function_name == "bool") {
+            if (call_expr->arguments.empty()) {
+                if (function_name == "int") output << "0";
+                else if (function_name == "float") output << "0.0f";
+                else if (function_name == "str") { require("string"); output << "std::string()"; }
+                else output << "false";
+                return;
             }
-            else {
-                output << "0";
-            }
-            return;
-        }
-        else if (function_name == "float") {
-            if (call_expr->arguments.size() > 0) {
-                output << "static_cast<float>(";
-                generateExpression(call_expr->arguments[0].get());
-                output << ")";
-            }
-            else {
-                output << "0.0f";
-            }
-            return;
-        }
-        else if (function_name == "str") {
-            if (call_expr->arguments.size() > 0) {
-                output << "std::to_string(";
-                generateExpression(call_expr->arguments[0].get());
-                output << ")";
-            }
-            else {
-                output << "\"\"";
-            }
-            return;
-        }
-        else if (function_name == "bool") {
-            if (call_expr->arguments.size() > 0) {
-                output << "static_cast<bool>(";
-                generateExpression(call_expr->arguments[0].get());
-                output << ")";
-            }
-            else {
-                output << "false";
-            }
+            // int("42"), float("3.5"), str(x), bool(x): resolved by argument type in the runtime
+            useRuntime();
+            output << "pycpp::to_" << function_name << "(";
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
             return;
         }
         else if (function_name == "list") {
@@ -1721,34 +1753,23 @@ void CodeGenerator::generateExpression(Expr* expr) {
 
         // Handle member function calls (non-built-in)
         if (auto member_access = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
-            generateExpression(member_access->object.get());
-
-            // Use '.' for objects, '->' for pointers and this
+            std::string method = member_access->member;
+            bool arrow = false;
+            Type* object_type = nullptr;
             if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-                if (ident->name == "self" && current_class) {
-                    output << "->" << member_access->member << "(";
-                }
-                else if (ident->name == "this") {
-                    output << "->" << member_access->member << "(";
-                }
-                else if (isPointerExpr(ident)) {
-                    output << "->" << member_access->member << "(";
-                }
-                else {
-                    // For regular objects, use dot operator
-                    output << "." << member_access->member << "(";
-                }
+                arrow = (ident->name == "self" && current_class) || ident->name == "this" || isPointerExpr(ident);
+                object_type = lookupVar(ident->name);
             }
-            else {
-                // For complex expressions, default to dot operator (safer)
-                output << "." << member_access->member << "(";
+            // list.append(x) -> push_back(x). A variable declared as a user class keeps its own method.
+            if (method == "append" && call_expr->arguments.size() == 1 && !dynamic_cast<BasicType*>(object_type)) {
+                method = "push_back";
             }
 
+            generateExpression(member_access->object.get());
+            output << (arrow ? "->" : ".") << method << "(";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                if (i > 0) output << ", ";
                 generateExpression(call_expr->arguments[i].get());
-                if (i < call_expr->arguments.size() - 1) {
-                    output << ", ";
-                }
             }
             output << ")";
             return;
@@ -2256,7 +2277,7 @@ void CodeGenerator::visit(ForStmt& node) {
         generateExpression(iterable);
     }
     else {
-        output << getIndent() << "for (auto " << node.var_name << " : ";
+        output << getIndent() << "for (auto& " << node.var_name << " : ";
         if (node.iterable) {
             generateExpression(node.iterable.get());
         }
@@ -2402,4 +2423,111 @@ void CodeGenerator::visit(ImportStmt& node) {
 
 void CodeGenerator::visit(UseStmt& node) {
     output << getIndent() << "// use " << node.library << "\n";
+}
+
+// ===== defer =====
+// `defer stmt` becomes an RAII object, so it runs on normal exit, early return,
+// break and continue, in reverse order of declaration.
+void CodeGenerator::visit(DeferStmt& node) {
+    useRuntime();
+    output << getIndent() << "pycpp::Defer pycpp_defer_" << ++defer_counter << "([&]() {\n";
+    indent(); pushScope();
+    for (auto& s : node.body) generateStatement(s.get());
+    popScope(); dedent();
+    output << getIndent() << "});\n";
+}
+
+// ===== match / case =====
+// A real `switch` when every pattern is an integer literal and no case body uses
+// `break` (inside a switch it would mean something else); an if/else-if chain for
+// everything else (strings, floats, ...).
+static bool isIntPattern(Expr* e) {
+    if (dynamic_cast<IntLiteral*>(e)) return true;
+    auto un = dynamic_cast<UnaryOp*>(e);
+    return un && un->op == "-" && dynamic_cast<IntLiteral*>(un->operand.get());
+}
+
+static bool containsBreak(const std::vector<std::unique_ptr<Stmt>>& body) {   // does not enter loops
+    for (auto& s : body) {
+        if (dynamic_cast<BreakStmt*>(s.get())) return true;
+        if (auto i = dynamic_cast<IfStmt*>(s.get())) {
+            if (containsBreak(i->then_branch) || containsBreak(i->else_branch)) return true;
+            for (auto& e : i->elif_branches) if (containsBreak(e.second)) return true;
+        }
+        else if (auto u = dynamic_cast<UnsafeBlock*>(s.get())) { if (containsBreak(u->body)) return true; }
+        else if (auto b = dynamic_cast<Block*>(s.get())) { if (containsBreak(b->statements)) return true; }
+        else if (auto m = dynamic_cast<MatchStmt*>(s.get())) {
+            for (auto& c : m->cases) if (containsBreak(c.body)) return true;
+        }
+    }
+    return false;
+}
+
+void CodeGenerator::visit(MatchStmt& node) {
+    bool use_switch = true;
+    for (auto& c : node.cases) {
+        if (containsBreak(c.body)) use_switch = false;
+        for (auto& p : c.patterns) if (!isIntPattern(p.get())) use_switch = false;
+    }
+
+    auto emitBody = [&](const std::vector<std::unique_ptr<Stmt>>& body) {
+        indent(); pushScope();
+        for (auto& s : body) generateStatement(s.get());
+        popScope(); dedent();
+    };
+
+    if (use_switch) {
+        output << getIndent() << "switch (";
+        generateExpression(node.subject.get());
+        output << ") {\n";
+        for (auto& c : node.cases) {
+            if (c.is_default) {
+                output << getIndent() << "default: {\n";
+            }
+            else {
+                for (size_t i = 0; i < c.patterns.size(); ++i) {
+                    output << getIndent() << "case ";
+                    generateExpression(c.patterns[i].get());
+                    output << (i + 1 < c.patterns.size() ? ":\n" : ": {\n");
+                }
+            }
+            emitBody(c.body);
+            const bool jumps = !c.body.empty() &&
+                (dynamic_cast<ReturnStmt*>(c.body.back().get()) || dynamic_cast<ContinueStmt*>(c.body.back().get()));
+            if (!jumps) { indent(); output << getIndent() << "break;\n"; dedent(); }
+            output << getIndent() << "}\n";
+        }
+        output << getIndent() << "}\n";
+        return;
+    }
+
+    // if-chain: the subject is evaluated once
+    const std::string tmp = "pycpp_match_" + std::to_string(++match_counter);
+    output << getIndent() << "{\n";
+    indent();
+    output << getIndent() << "const auto& " << tmp << " = ";
+    generateExpression(node.subject.get());
+    output << ";\n";
+    bool first = true;
+    const MatchCase* fallback = nullptr;
+    for (auto& c : node.cases) {
+        if (c.is_default) { fallback = &c; continue; }
+        output << getIndent() << (first ? "if (" : "else if (");
+        for (size_t i = 0; i < c.patterns.size(); ++i) {
+            if (i > 0) output << " || ";
+            output << tmp << " == ";
+            generateExpression(c.patterns[i].get());
+        }
+        output << ") {\n";
+        emitBody(c.body);
+        output << getIndent() << "}\n";
+        first = false;
+    }
+    if (fallback) {
+        output << getIndent() << (first ? "{\n" : "else {\n");
+        emitBody(fallback->body);
+        output << getIndent() << "}\n";
+    }
+    dedent();
+    output << getIndent() << "}\n";
 }

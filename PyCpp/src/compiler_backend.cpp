@@ -142,7 +142,9 @@ std::string CompilerBackend::buildCompileCommand(CompilerKind kind, const Compil
             command += " " + quoteArgWindows(file);
         }
         command += " /Fe" + quoteArgWindows(request.exeFile);
-        command += " /I" + quoteArgWindows(request.includeDir);
+        // no /I: a quoted include is found next to the including file, and
+        // MSVC has no quote-only variant of /I
+        if (request.optimize) command += " /O2";
         command += " /nologo";
     }
     else {
@@ -151,7 +153,9 @@ std::string CompilerBackend::buildCompileCommand(CompilerKind kind, const Compil
             command += " " + quoteArg(file);
         }
         command += " -o " + quoteArg(request.exeFile);
-        command += " -I" + quoteArg(request.includeDir);
+        // -iquote only affects #include "..."; plain -I let temp/assert.h hijack <cassert>
+        command += " -iquote " + quoteArg(request.includeDir);
+        if (request.optimize) command += " -O2";
         command += " " + request.linkerFlags;
         
     }

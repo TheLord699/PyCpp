@@ -18,13 +18,18 @@ def main() -> int:
 
             if CheckCollisionRecs(hero.get_rect(), hazard.get_rect()):
                 game_over = true
+        else:
+            if IsKeyPressed(KEY_R):
+                hero = Player(400.0, 550.0, 40.0)
+                hazard = Enemy(400.0, 40.0, 4.0)
+                game_over = false
 
         BeginDrawing()
         ClearBackground(BLACK)
 
         if game_over:
             DrawText("GAME OVER", 250, 280, 40, RED)
-            DrawText("Press ESC to quit", 280, 330, 20, LIGHTGRAY)
+            DrawText("Press R to Restart or ESC to quit", 200, 330, 20, LIGHTGRAY)
         else:
             hero.draw()
             hazard.draw()

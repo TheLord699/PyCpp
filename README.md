@@ -19,7 +19,7 @@ The goal is simple: **Everything C++ can do, PyCPP should be able to do — with
 - Headerless development — no `.h` or `.hpp` files.
 - Full C/C++ interoperability.
 - Manual memory management.
-- Optional unsafe operations.
+- Optional unsafe flag.
 - Templates and compile-time evaluation.
 - Python-like imports and modules.
 - Flexible function argument passing.

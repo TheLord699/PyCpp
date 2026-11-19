@@ -86,6 +86,41 @@ inline bool parse_bool(const std::string& raw) {
     fail("ValueError", "cannot convert '" + raw + "' to bool");
 }
 
+// Shortest text that reads back as the same value, in Python's style:
+// 100.0, 0.1, 3.5, 1e-05, 1e+16, inf, nan
+template <class T>
+std::string float_to_str(T v) {
+    if (std::isnan(v)) return "nan";
+    if (std::isinf(v)) return v < 0 ? "-inf" : "inf";
+    char buf[64];
+    for (int p = 0; p <= 17; ++p) {
+        std::snprintf(buf, sizeof buf, "%.*e", p, static_cast<double>(v));
+        if (static_cast<T>(std::strtod(buf, nullptr)) == v) break;
+    }
+    std::string s = buf;                                  // e.g. -1.5e+02
+    const bool neg = s[0] == '-';
+    if (neg) s.erase(0, 1);
+    const size_t epos = s.find('e');
+    const int exp10 = std::atoi(s.c_str() + epos + 1);
+    std::string digits;
+    for (size_t i = 0; i < epos; ++i) if (s[i] != '.') digits += s[i];
+    std::string out;
+    if (exp10 < -4 || exp10 >= 16) {
+        out = digits.substr(0, 1);
+        if (digits.size() > 1) out += "." + digits.substr(1);
+        char tail[16];
+        std::snprintf(tail, sizeof tail, "e%c%02d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+        out += tail;
+    } else if (exp10 >= 0) {
+        const size_t whole = static_cast<size_t>(exp10) + 1;
+        if (digits.size() < whole) digits.append(whole - digits.size(), '0');
+        out = digits.substr(0, whole) + "." + (digits.size() > whole ? digits.substr(whole) : std::string("0"));
+    } else {
+        out = "0." + std::string(static_cast<size_t>(-exp10 - 1), '0') + digits;
+    }
+    return neg ? "-" + out : out;
+}
+
 template <class T> std::string to_str(const T& v);
 template <class T> std::string to_repr(const T& v);
 template <class C> std::string container_str(const C& c);
@@ -97,14 +132,7 @@ std::string to_str(const T& v) {
     else if constexpr (std::is_same_v<T, char>) return std::string(1, v);
     else if constexpr (std::is_integral_v<T>) return std::to_string(v);
     else if constexpr (std::is_floating_point_v<T>) {
-        char buf[48];
-        for (int p = 1; p <= 17; ++p) {                // shortest text that round-trips
-            std::snprintf(buf, sizeof buf, "%.*g", p, static_cast<double>(v));
-            if (static_cast<T>(std::strtod(buf, nullptr)) == v) break;
-        }
-        std::string s = buf;
-        if (s.find_first_of(".en") == std::string::npos) s += ".0";
-        return s;
+        return float_to_str(v);
     } else {
         if constexpr (requires { v.begin(); v.end(); }) return container_str(v);
         else { std::ostringstream o; o << v; return o.str(); }

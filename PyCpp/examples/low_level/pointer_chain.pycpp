@@ -1,0 +1,27 @@
+struct Node:
+    x: int
+    next: *Node
+
+def make(x: int, nxt: *Node) -> *Node:
+    n: *Node = mem.alloc[Node]()
+    n.x = x              # was: n.x = x;   now: n->x = x;
+    n.next = nxt
+    return n
+
+def main() -> int:
+    a: *Node = make(1, nullptr)
+    b: *Node = make(2, a)
+    c: *Node = make(3, b)
+
+    print(c.next.next.x)     # chained pointers: c->next->next->x   (expect 1)
+
+    (*c).x = 30              # postfix after parentheses: (*c).x = 30
+    print((*c).x)            # expect 30
+
+    nodes: list[*Node] = [a, b, c]
+    print(nodes[1].x)        # postfix after a subscript: nodes[1]->x   (expect 2)
+
+    mem.free(c)
+    mem.free(b)
+    mem.free(a)
+    return 0

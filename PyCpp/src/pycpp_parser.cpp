@@ -2204,6 +2204,38 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 throw std::runtime_error("Expected expression, got: '" + peek().value + "'");
             }
         }
+
+        // [fix.py] Postfix operators after ANY primary expression, not just after a bare
+        // identifier: (*p).x   a[i].x   f(x).y   obj.method().field   a[i][j]
+        while (result) {
+            if (check(TokenType::DOT)) {
+                advance();
+                if (atEnd() || !isWordToken(peek())) {
+                    throw std::runtime_error("Expected identifier after '.'");
+                }
+                Token member = advance();
+                result = std::make_unique<MemberAccess>(std::move(result), member.value,
+                                                        member.line, member.column);
+            }
+            else if (check(TokenType::LBRACKET)) {
+                Token open = advance();
+                auto index = parseExpression();
+                consume(TokenType::RBRACKET, "Expected ']' after index");
+                auto subscript = std::make_unique<CallExpr>();
+                subscript->callee = std::move(result);
+                subscript->is_subscript = true;
+                subscript->arguments.push_back(std::move(index));
+                subscript->line = open.line;
+                subscript->column = open.column;
+                result = std::move(subscript);
+            }
+            else if (check(TokenType::LPAREN)) {
+                result = parseCall(std::move(result));
+            }
+            else {
+                break;
+            }
+        }
     }
     catch (...) {
         recursion_depth--;

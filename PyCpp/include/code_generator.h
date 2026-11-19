@@ -16,6 +16,8 @@ namespace pycpp {
 void registerClasses(Program* program);
 bool isInheritedMember(const std::string& class_name, const std::string& member);
 bool hasSubclasses(const std::string& class_name);
+// [fix.py] declared type of a member (searches base classes); nullptr when unknown
+Type* memberType(const std::string& class_name, const std::string& member);
 }
 
 class CodeGenerator : public ASTVisitor {
@@ -47,6 +49,16 @@ private:
     void popScope();
     void declareVar(const std::string& name, Type* type);
     Type* lookupVar(const std::string& name);
+    // [fix.py] what the generator can tell about an expression's type
+    struct TypeInfo {
+        bool known = false;      // false: nothing could be determined
+        int ptr = 0;             // pointer depth (Node* -> 1, Node** -> 2)
+        std::string cls;         // class/struct name when it is one
+        Type* elem = nullptr;    // element type when it is a list[T]
+    };
+    TypeInfo typeInfoOf(Type* type);
+    TypeInfo exprTypeInfo(Expr* expr);
+    void generateObjectOperand(Expr* expr);   // parenthesises (*p), a + b, ... before '.' / '->' / '['
     bool isPointerExpr(Expr* expr);
     std::string exprToString(Expr* expr);
     bool usesSelf(Expr* expr);

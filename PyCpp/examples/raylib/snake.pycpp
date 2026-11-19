@@ -1,0 +1,110 @@
+use <raylib.h>
+
+constexpr CELL_SIZE: int = 25
+constexpr COLS: int = 32
+constexpr ROWS: int = 18
+
+struct Node:
+    x: int
+    y: int
+    next: *Node
+
+def spawn_node(x: int, y: int, next_node: *Node) -> *Node:
+    n: *Node = mem.alloc[Node]()
+    n.x = x
+    n.y = y
+    n.next = next_node
+    return n
+
+def free_snake(head: *Node) -> void:
+    curr: *Node = head
+    while curr != nullptr:
+        nxt: *Node = curr.next
+        mem.free(curr)
+        curr = nxt
+
+def main() -> int:
+    InitWindow(COLS * CELL_SIZE, ROWS * CELL_SIZE, "PyCPP Low-Level Pointer Snake")
+    SetTargetFPS(12)
+
+    # Manually allocate a 3-segment linked list on the heap
+    head: *Node = spawn_node(10, 9, nullptr)
+    head = spawn_node(11, 9, head)
+    head = spawn_node(12, 9, head)
+
+    dir_x: int = 1
+    dir_y: int = 0
+    food_x: int = randint(1, COLS - 2)
+    food_y: int = randint(1, ROWS - 2)
+    score: int = 0
+    game_over: bool = False
+
+    while not WindowShouldClose():
+        if not game_over:
+            if IsKeyPressed(KEY_UP) and dir_y == 0:
+                dir_x = 0
+                dir_y = -1
+            elif IsKeyPressed(KEY_DOWN) and dir_y == 0:
+                dir_x = 0
+                dir_y = 1
+            elif IsKeyPressed(KEY_LEFT) and dir_x == 0:
+                dir_x = -1
+                dir_y = 0
+            elif IsKeyPressed(KEY_RIGHT) and dir_x == 0:
+                dir_x = 1
+                dir_y = 0
+
+            next_x: int = head.x + dir_x
+            next_y: int = head.y + dir_y
+
+            # Wall collision check
+            if next_x < 0 or next_x >= COLS or next_y < 0 or next_y >= ROWS:
+                game_over = True
+
+            # Self-collision check by walking raw pointers
+            check: *Node = head
+            while check != nullptr:
+                if check.x == next_x and check.y == next_y:
+                    game_over = True
+                check = check.next
+
+            if not game_over:
+                # Allocate new head node on the heap
+                head = spawn_node(next_x, next_y, head)
+
+                if next_x == food_x and next_y == food_y:
+                    score += 10
+                    food_x = randint(1, COLS - 2)
+                    food_y = randint(1, ROWS - 2)
+                else:
+                    # Walk to second-to-last node and mem.free() the tail
+                    curr: *Node = head
+                    while curr.next != nullptr and curr.next.next != nullptr:
+                        curr = curr.next
+                    mem.free(curr.next)
+                    curr.next = nullptr
+
+        BeginDrawing()
+        ClearBackground(BLACK)
+
+        # Draw food
+        DrawRectangle(food_x * CELL_SIZE, food_y * CELL_SIZE, CELL_SIZE - 2, CELL_SIZE - 2, RED)
+
+        # Walk the heap-allocated linked list and draw every segment
+        seg: *Node = head
+        is_head: bool = True
+        while seg != nullptr:
+            col: Color = GREEN if is_head else LIME
+            DrawRectangle(seg.x * CELL_SIZE, seg.y * CELL_SIZE, CELL_SIZE - 2, CELL_SIZE - 2, col)
+            is_head = False
+            seg = seg.next
+
+        if game_over:
+            DrawText("GAME OVER! Close window to free heap.", 170, 200, 22, RAYWHITE)
+
+        EndDrawing()
+
+    # Clean up every remaining heap node before exit
+    free_snake(head)
+    CloseWindow()
+    return 0

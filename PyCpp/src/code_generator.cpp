@@ -12,7 +12,7 @@
 
 // ---- Class registry (inheritance across modules) ----
 namespace {
-struct ClassInfo { std::string base; std::set<std::string> members; };
+struct ClassInfo { std::string base; std::set<std::string> members; std::map<std::string, Type*> types; /* [fix.py] */ };
 std::map<std::string, ClassInfo>& classRegistry() {
     static std::map<std::string, ClassInfo> registry;
     return registry;
@@ -30,7 +30,17 @@ std::string selfMemberAssigned(Stmt* stmt) {
 }
 
 void pycpp::registerClasses(Program* program) {
+    // [fix.py] Also records the declared type of every member (and covers structs), so the
+    // code generator can tell which member accesses go through a pointer and need '->'.
     for (auto& stmt : program->statements) {
+        if (auto st = dynamic_cast<StructDef*>(stmt.get())) {
+            ClassInfo& sinfo = classRegistry()[st->name];
+            for (auto& f : st->fields) {
+                sinfo.members.insert(f->var_name);
+                if (f->type) sinfo.types[f->var_name] = f->type.get();
+            }
+            continue;
+        }
         auto cls = dynamic_cast<ClassDef*>(stmt.get());
         if (!cls) continue;
         ClassInfo& info = classRegistry()[cls->name];
@@ -39,15 +49,34 @@ void pycpp::registerClasses(Program* program) {
             std::string n = attr->var_name;
             if (n.rfind("self.", 0) == 0) n = n.substr(5);
             info.members.insert(n);
+            if (attr->type) info.types[n] = attr->type.get();
         }
         for (auto& m : cls->methods) {
             if (m->name != "__init__") continue;
             for (auto& s : m->body) {
                 std::string n = selfMemberAssigned(s.get());
-                if (!n.empty()) info.members.insert(n);
+                if (n.empty()) continue;
+                info.members.insert(n);
+                if (auto v = dynamic_cast<VarDecl*>(s.get()))
+                    if (v->type && !info.types.count(n)) info.types[n] = v->type.get();
             }
         }
     }
+}
+
+// [fix.py] declared type of class/struct member `member`, searching base classes
+Type* pycpp::memberType(const std::string& cls, const std::string& member) {
+    auto& reg = classRegistry();
+    std::string current = cls;
+    for (int depth = 0; depth < 64; ++depth) {
+        auto it = reg.find(current);
+        if (it == reg.end()) return nullptr;
+        auto found = it->second.types.find(member);
+        if (found != it->second.types.end()) return found->second;
+        if (it->second.base.empty()) return nullptr;
+        current = it->second.base;
+    }
+    return nullptr;
 }
 
 bool pycpp::isInheritedMember(const std::string& cls, const std::string& member) {
@@ -353,12 +382,75 @@ Type* CodeGenerator::lookupVar(const std::string& name) {
 
 // True when the expression is a variable declared as a pointer (*T), so that
 // member access must use '->' instead of '.'.
-bool CodeGenerator::isPointerExpr(Expr* expr) {
-    if (auto ident = dynamic_cast<Identifier*>(expr)) {
-        Type* type = lookupVar(ident->name);
-        return type && dynamic_cast<PointerType*>(type) && !type->is_reference;
+// [fix.py] Type facts about an expression: pointer depth, class name, list element type.
+CodeGenerator::TypeInfo CodeGenerator::typeInfoOf(Type* type) {
+    TypeInfo info;
+    if (!type) return info;
+    Type* cur = type;
+    while (auto p = dynamic_cast<PointerType*>(cur)) {
+        info.ptr++;
+        cur = p->base_type.get();
+        if (!cur) return info;
     }
-    return false;
+    info.known = true;
+    if (auto basic = dynamic_cast<BasicType*>(cur)) info.cls = basic->name;
+    else if (auto list = dynamic_cast<ListType*>(cur)) info.elem = list->element_type.get();
+    return info;
+}
+
+CodeGenerator::TypeInfo CodeGenerator::exprTypeInfo(Expr* expr) {
+    TypeInfo none;
+    if (!expr) return none;
+
+    if (auto ident = dynamic_cast<Identifier*>(expr)) {
+        if ((ident->name == "self" || ident->name == "this") && current_class) {
+            TypeInfo self;
+            self.known = true;
+            self.ptr = 1;
+            self.cls = current_class->name;
+            return self;
+        }
+        return typeInfoOf(lookupVar(ident->name));
+    }
+    if (auto member = dynamic_cast<MemberAccess*>(expr)) {
+        TypeInfo object = exprTypeInfo(member->object.get());
+        if (!object.known || object.cls.empty()) return none;
+        return typeInfoOf(pycpp::memberType(object.cls, member->member));
+    }
+    if (auto unary = dynamic_cast<UnaryOp*>(expr)) {
+        TypeInfo inner = exprTypeInfo(unary->operand.get());
+        if (!inner.known) return none;
+        if (unary->op == "*" && inner.ptr > 0) { inner.ptr--; return inner; }   // *p
+        if (unary->op == "&") { inner.ptr++; return inner; }                    // &x
+        return none;
+    }
+    if (auto call = dynamic_cast<CallExpr*>(expr)) {
+        if (call->is_subscript) {                                               // a[i]
+            TypeInfo base = exprTypeInfo(call->callee.get());
+            if (!base.known) return none;
+            if (base.ptr > 0) { base.ptr--; return base; }
+            if (base.elem) return typeInfoOf(base.elem);
+        }
+        return none;
+    }
+    return none;
+}
+
+// True when the expression is a pointer, so member access must use '->' instead of '.'.
+// Works for variables, self, chained members (a.next.next), *p, &x and list elements.
+bool CodeGenerator::isPointerExpr(Expr* expr) {
+    TypeInfo info = exprTypeInfo(expr);
+    return info.known && info.ptr > 0;
+}
+
+// Operand of '.', '->' or '[': (*p).x, (a + b).x need their parentheses back,
+// because the parser drops them.
+void CodeGenerator::generateObjectOperand(Expr* expr) {
+    const bool wrap = dynamic_cast<UnaryOp*>(expr) || dynamic_cast<BinaryOp*>(expr) ||
+                      dynamic_cast<TernaryOp*>(expr);
+    if (wrap) output << "(";
+    generateExpression(expr);
+    if (wrap) output << ")";
 }
 
 // Render an expression to a string without touching the main output.
@@ -1174,7 +1266,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
     if (auto call_expr = dynamic_cast<CallExpr*>(expr)) {
         // a[i] is indexing, not a call
         if (call_expr->is_subscript) {
-            generateExpression(call_expr->callee.get());
+            generateObjectOperand(call_expr->callee.get());   // [fix.py]
             output << "[";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                 if (i > 0) output << ", ";
@@ -1870,10 +1962,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
         // Handle member function calls (non-built-in)
         if (auto member_access = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
             std::string method = member_access->member;
-            bool arrow = false;
+            bool arrow = isPointerExpr(member_access->object.get());   // [fix.py] handles chains too
             Type* object_type = nullptr;
             if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-                arrow = (ident->name == "self" && current_class) || ident->name == "this" || isPointerExpr(ident);
+                if (ident->name == "this") arrow = true;
                 object_type = lookupVar(ident->name);
             }
             // list.append(x) -> push_back(x). A variable declared as a user class keeps its own method.
@@ -1881,7 +1973,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
                 method = "push_back";
             }
 
-            generateExpression(member_access->object.get());
+            generateObjectOperand(member_access->object.get());
             output << (arrow ? "->" : ".") << method << "(";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                 if (i > 0) output << ", ";
@@ -2047,9 +2139,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
                         generateExpression(bin_op->right.get());
                         return; // Early return to avoid extra parentheses
                     }
-                    // Any other identifier: emit obj.member = value
-                    generateExpression(member_access->object.get());
-                    output << "." << member_access->member << " = ";
+                    // [fix.py] Any other object: the member-access generator picks '.' or '->'
+                    generateExpression(member_access);
+                    output << " = ";
                     generateExpression(bin_op->right.get());
                     return;
                 }
@@ -2154,9 +2246,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
         }
         else {
-            // For complex expressions, use dot operator
-            generateExpression(member_access->object.get());
-            output << "." << member_access->member;
+            // [fix.py] Chained / complex objects: '->' whenever the object is itself a pointer
+            generateObjectOperand(member_access->object.get());
+            output << (isPointerExpr(member_access->object.get()) ? "->" : ".")
+                   << member_access->member;
         }
     }
     else if (auto list_lit = dynamic_cast<ListLiteral*>(expr)) {

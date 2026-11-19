@@ -47,11 +47,37 @@ Token Lexer::readNumber() {
         number += advance();
     }
 
+    // Hexadecimal and binary literals are normalised to decimal text
+    if (number == "0" && (peek() == 'x' || peek() == 'X')) {
+        number += advance();
+        while (std::isxdigit(static_cast<unsigned char>(peek()))) number += advance();
+        if (number.size() <= 2) return Token(TokenType::UNKNOWN, number, start_line, start_column);
+        return Token(TokenType::NUMBER, std::to_string(std::stoull(number, nullptr, 16)), start_line, start_column);
+    }
+    if (number == "0" && (peek() == 'b' || peek() == 'B') && position + 1 < source.length() &&
+        (source[position + 1] == '0' || source[position + 1] == '1')) {
+        advance();
+        std::string bits;
+        while (peek() == '0' || peek() == '1') bits += advance();
+        return Token(TokenType::NUMBER, std::to_string(std::stoull(bits, nullptr, 2)), start_line, start_column);
+    }
+
     // Check for decimal point
     if (peek() == '.') {
         number += advance();
         while (std::isdigit(peek())) {
             number += advance();
+        }
+    }
+
+    // Exponent: 1e5, 2.5E-3
+    if ((peek() == 'e' || peek() == 'E') && position + 1 < source.length()) {
+        const char next = source[position + 1];
+        const size_t digit_at = (next == '+' || next == '-') ? position + 2 : position + 1;
+        if (digit_at < source.length() && std::isdigit(static_cast<unsigned char>(source[digit_at]))) {
+            number += advance();
+            if (next == '+' || next == '-') number += advance();
+            while (std::isdigit(peek())) number += advance();
         }
     }
 
@@ -333,10 +359,7 @@ Token Lexer::readOperator() {
             advance();
             return Token(TokenType::PLUS_EQUAL, "+=", start_line, start_column);
         }
-        if (peek() == '+') {
-            advance();
-            return Token(TokenType::PLUS, "++", start_line, start_column);
-        }
+        // (no '++' token: in PyCPP, a++b is a + (+b))
         return Token(TokenType::PLUS, "+", start_line, start_column);
 
     case '-':
@@ -348,10 +371,7 @@ Token Lexer::readOperator() {
             advance();
             return Token(TokenType::ARROW, "->", start_line, start_column);
         }
-        if (peek() == '-') {
-            advance();
-            return Token(TokenType::MINUS, "--", start_line, start_column);
-        }
+        // (no '--' token: in PyCPP, a--b is a - (-b))
         return Token(TokenType::MINUS, "-", start_line, start_column);
 
     case '*':

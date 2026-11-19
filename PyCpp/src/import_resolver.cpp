@@ -20,11 +20,13 @@ std::vector<std::string> ImportResolver::resolveAllDependencies(const std::strin
 }
 
 void ImportResolver::resolveDependenciesRecursive(const std::string& filename, std::vector<std::string>& result) {
-    if (processed_files.count(filename)) {
+    std::error_code key_ec;
+    const std::string key = std::filesystem::weakly_canonical(filename, key_ec).string();
+    if (processed_files.count(key)) {
         return; // Already processed
     }
 
-    processed_files.insert(filename);
+    processed_files.insert(key);
     result.push_back(filename);
 
     // Extract imports from this file
@@ -33,6 +35,10 @@ void ImportResolver::resolveDependenciesRecursive(const std::string& filename, s
     // Resolve each import recursively
     for (const auto& module_name : imports) {
         std::string module_file = findModuleFile(module_name);
+        if (module_file.empty()) {
+            std::cerr << "warning: cannot find module '" << module_name << "' (looked for "
+                      << module_name << ".pycpp in the import search paths)\n";
+        }
         if (!module_file.empty()) {
             resolveDependenciesRecursive(module_file, result);
         }

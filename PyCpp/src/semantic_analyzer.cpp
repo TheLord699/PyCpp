@@ -90,9 +90,16 @@ SemanticAnalyzer::SemanticAnalyzer()
     addSymbol("mem.alloc", "function");
     addSymbol("mem.free", "function");
     addSymbol("assert", "function");
+    for (const char* name : { "sqrt", "sin", "cos", "tan", "log", "log10", "exp",
+                              "ceil", "floor", "randint", "choice", "shuffle" }) {
+        addSymbol(name, "function");
+    }
     addSymbol("true", "bool");
     addSymbol("false", "bool");
     addSymbol("nullptr", "void*");
+    for (const char* name : { "list", "dict", "set", "tuple" }) {
+        addSymbol(name, "function");
+    }
 }
 
 void SemanticAnalyzer::analyze(std::unique_ptr<Program>& program) {
@@ -553,7 +560,11 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             std::string right_type = getExpressionType(bin_op->right.get());
 
             if (!typesAreCompatible(left_type, right_type)) {
-                if (bin_op->op == "=")
+                if (bin_op->op == "in" || bin_op->op == "not in" ||
+                    bin_op->op == "is" || bin_op->op == "is not") {
+                    // membership / identity tests compare different types by design
+                }
+                else if (bin_op->op == "=")
                     error("mismatched types: expected " + friendlyType(left_type) + ", found " + friendlyType(right_type),
                         bin_op->line, bin_op->column, "convert explicitly, e.g. int(x), float(x) or str(x)");
                 else

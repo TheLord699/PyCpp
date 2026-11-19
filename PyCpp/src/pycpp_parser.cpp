@@ -1621,6 +1621,19 @@ std::unique_ptr<Expr> PyCppParser::parseAssignment() {
 
     auto expr = parseBooleanOperations();
 
+    // Conditional expression:  value_if_true if condition else value_if_false
+    if (check(TokenType::IF)) {
+        Token if_token = advance();
+        auto ternary = std::make_unique<TernaryOp>();
+        ternary->then_expr = std::move(expr);
+        ternary->condition = parseBooleanOperations();
+        consume(TokenType::ELSE, "Expected 'else' in conditional expression");
+        ternary->else_expr = parseAssignment();
+        ternary->line = if_token.line;
+        ternary->column = if_token.column;
+        return ternary;
+    }
+
     // Handle all assignment operators
     if (match(TokenType::EQUAL)) {
         auto value = parseAssignment();
@@ -2017,7 +2030,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
         }
         else if (match(TokenType::NUMBER)) {
             // Check if it's a float (contains decimal point)
-            if (tokens[position - 1].value.find('.') != std::string::npos) {
+            if (tokens[position - 1].value.find_first_of(".eE") != std::string::npos) {
                 auto lit = std::make_unique<FloatLiteral>();
                 lit->value = std::stod(tokens[position - 1].value);
                 lit->line = tokens[position - 1].line;
@@ -2026,7 +2039,13 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
             }
             else {
                 auto lit = std::make_unique<IntLiteral>();
-                lit->value = std::stoi(tokens[position - 1].value);
+                try {
+                    lit->value = std::stoi(tokens[position - 1].value);
+                }
+                catch (const std::exception&) {
+                    throw std::runtime_error("integer literal '" + tokens[position - 1].value +
+                                             "' is out of range for int");
+                }
                 lit->line = tokens[position - 1].line;
                 lit->column = tokens[position - 1].column;
                 result = std::move(lit);
@@ -2157,7 +2176,9 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
         }
         // Allow explicit casts: int(x), float(x), str(x), bool(x)
         else if (check(TokenType::INT) || check(TokenType::FLOAT) ||
-                 check(TokenType::STR) || check(TokenType::BOOL)) {
+                 check(TokenType::STR) || check(TokenType::BOOL) ||
+                 check(TokenType::LIST) || check(TokenType::DICT) ||
+                 check(TokenType::SET) || check(TokenType::TUPLE)) {
             std::string type_name = peek().value;
             advance();
             

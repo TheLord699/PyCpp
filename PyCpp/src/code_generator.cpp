@@ -289,6 +289,31 @@ public:
 // Marks a source blank line in the generated text (resolved in generateProgram).
 static const char kBlankMarker = '\x01';
 
+// Text of a PyCPP string literal -> body of a C++ string literal.
+static std::string cppEscape(const std::string& raw) {
+    std::string out;
+    for (unsigned char c : raw) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '"':  out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\t': out += "\\t"; break;
+        case '\r': out += "\\r"; break;
+        default:
+            if (c < 0x20 || c == 0x7f) {
+                out += '\\';
+                out += static_cast<char>('0' + ((c >> 6) & 7));
+                out += static_cast<char>('0' + ((c >> 3) & 7));
+                out += static_cast<char>('0' + (c & 7));
+            }
+            else {
+                out += static_cast<char>(c);
+            }
+        }
+    }
+    return out;
+}
+
 CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
     scopes.emplace_back(); // global scope
 }
@@ -568,7 +593,8 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
         {"std::stringstream", "sstream"}, {"std::hex", "iomanip"}, {"std::oct", "iomanip"},
         {"std::min", "algorithm"}, {"std::max", "algorithm"}, {"std::sort", "algorithm"},
         {"std::reverse", "algorithm"}, {"std::min_element", "algorithm"}, {"std::max_element", "algorithm"},
-        {"std::accumulate", "numeric"},
+        {"std::accumulate", "numeric"}, {"std::decay_t", "type_traits"},
+        {"std::shuffle", "algorithm"}, {"std::mt19937", "random"}, {"std::random_device", "random"},
         {"std::sqrt", "cmath"}, {"std::pow", "cmath"}, {"std::abs", "cmath"}, {"std::round", "cmath"},
         {"std::sin", "cmath"}, {"std::cos", "cmath"}, {"std::tan", "cmath"}, {"std::log", "cmath"},
         {"std::log10", "cmath"}, {"std::exp", "cmath"}, {"std::ceil", "cmath"}, {"std::floor", "cmath"},
@@ -1233,8 +1259,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
             output << "std::cout";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                 if (i > 0) output << " << ' '";
-                output << " << ";
+                useRuntime();
+                output << " << pycpp::to_str(";
                 generateExpression(call_expr->arguments[i].get());
+                output << ")";
             }
             output << " << '\\n'";
             return;
@@ -1244,7 +1272,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
             require("string");
             if (call_expr->arguments.size() > 0) {
                 // Print prompt first, then get input
-                output << "[]() { ";
+                output << lambdaCapture() << "() { ";
                 output << "std::cout << ";
                 generateExpression(call_expr->arguments[0].get());
                 output << " << std::flush; ";
@@ -1253,7 +1281,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
                 output << "return input; }()";
             }
             else {
-                output << "[]() { std::string input; std::getline(std::cin, input); return input; }()";
+                output << lambdaCapture() << "() { std::string input; std::getline(std::cin, input); return input; }()";
             }
             return;
         }
@@ -1282,6 +1310,24 @@ void CodeGenerator::generateExpression(Expr* expr) {
             output << "pycpp::to_" << function_name << "(";
             generateExpression(call_expr->arguments[0].get());
             output << ")";
+            return;
+        }
+        else if ((function_name == "list" || function_name == "set") && call_expr->arguments.size() == 1) {
+            output << lambdaCapture() << "() { auto&& pycpp_c = ";
+            generateExpression(call_expr->arguments[0].get());
+            output << "; return std::" << (function_name == "list" ? "vector" : "set")
+                   << "<std::decay_t<decltype(*pycpp_c.begin())>>(pycpp_c.begin(), pycpp_c.end()); }()";
+            return;
+        }
+        else if ((function_name == "dict" || function_name == "list" || function_name == "set") &&
+                 call_expr->arguments.empty()) {
+            output << "{}";   // takes its type from the declaration it initialises
+            return;
+        }
+        else if (function_name == "dict" && call_expr->arguments.size() == 1) {
+            output << lambdaCapture() << "() { auto&& pycpp_c = ";
+            generateExpression(call_expr->arguments[0].get());
+            output << "; return std::decay_t<decltype(pycpp_c)>(pycpp_c); }()";
             return;
         }
         else if (function_name == "list") {
@@ -1330,6 +1376,20 @@ void CodeGenerator::generateExpression(Expr* expr) {
             else {
                 output << "std::set<int>()";
             }
+            return;
+        }
+        else if ((function_name == "min" || function_name == "max" || function_name == "sum") &&
+                 call_expr->arguments.size() == 1) {
+            // The argument is evaluated once. Calling it twice (for begin() and end())
+            // would iterate two different temporaries, e.g. for range(5).
+            output << lambdaCapture() << "() { auto&& pycpp_c = ";
+            generateExpression(call_expr->arguments[0].get());
+            if (function_name == "sum")
+                output << "; return std::accumulate(pycpp_c.begin(), pycpp_c.end(), "
+                          "std::decay_t<decltype(*pycpp_c.begin())>{}); }()";
+            else
+                output << "; return *std::" << function_name
+                       << "_element(pycpp_c.begin(), pycpp_c.end()); }()";
             return;
         }
         else if (function_name == "min") {
@@ -1521,9 +1581,18 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
+        else if (function_name == "bin" || function_name == "oct" || function_name == "hex") {
+            if (call_expr->arguments.empty()) { output << "std::string(\"0\")"; return; }
+            useRuntime();
+            output << "pycpp::to_base(";
+            generateExpression(call_expr->arguments[0].get());
+            output << (function_name == "bin" ? ", 2, \"0b\")"
+                     : function_name == "oct" ? ", 8, \"0o\")" : ", 16, \"0x\")");
+            return;
+        }
         else if (function_name == "bin") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { std::stringstream ss; ss << std::hex << ";
+                output << lambdaCapture() << "() { std::stringstream ss; ss << std::hex << ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; return ss.str(); }()";
             }
@@ -1534,7 +1603,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "oct") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { std::stringstream ss; ss << std::oct << ";
+                output << lambdaCapture() << "() { std::stringstream ss; ss << std::oct << ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; return ss.str(); }()";
             }
@@ -1545,7 +1614,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "hex") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { std::stringstream ss; ss << std::hex << ";
+                output << lambdaCapture() << "() { std::stringstream ss; ss << std::hex << ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; return ss.str(); }()";
             }
@@ -1578,19 +1647,19 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "range") {
             if (call_expr->arguments.size() == 1) {
-                output << "[]() { std::vector<int> result; for(int i = 0; i < ";
+                output << lambdaCapture() << "() { std::vector<int> result; for(int i = 0; i < ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; i++) result.push_back(i); return result; }()";
             }
             else if (call_expr->arguments.size() == 2) {
-                output << "[]() { std::vector<int> result; for(int i = ";
+                output << lambdaCapture() << "() { std::vector<int> result; for(int i = ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; i < ";
                 generateExpression(call_expr->arguments[1].get());
                 output << "; i++) result.push_back(i); return result; }()";
             }
             else if (call_expr->arguments.size() == 3) {
-                output << "[]() { std::vector<int> result; for(int i = ";
+                output << lambdaCapture() << "() { std::vector<int> result; for(int i = ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; i < ";
                 generateExpression(call_expr->arguments[1].get());
@@ -1605,7 +1674,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "sorted") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { auto tmp = ";
+                output << lambdaCapture() << "() { auto tmp = ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; std::sort(tmp.begin(), tmp.end()); return tmp; }()";
             }
@@ -1616,7 +1685,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "reversed") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { auto tmp = ";
+                output << lambdaCapture() << "() { auto tmp = ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; std::reverse(tmp.begin(), tmp.end()); return tmp; }()";
             }
@@ -1627,9 +1696,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "enumerate") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { auto& container = ";
+                output << lambdaCapture() << "() { auto&& container =  ";
                 generateExpression(call_expr->arguments[0].get());
-                output << "; std::vector<std::pair<int, decltype(*container.begin())>> result; ";
+                output << "; std::vector<std::pair<int, std::decay_t<decltype(*container.begin())>>> result; ";
                 output << "int index = 0; for(auto& elem : container) { result.push_back({index++, elem}); } return result; }()";
             }
             else {
@@ -1637,11 +1706,23 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
+        else if (function_name == "zip" && call_expr->arguments.size() == 2) {
+            output << lambdaCapture() << "() { auto&& pycpp_a = ";
+            generateExpression(call_expr->arguments[0].get());
+            output << "; auto&& pycpp_b = ";
+            generateExpression(call_expr->arguments[1].get());
+            output << "; std::vector<std::pair<std::decay_t<decltype(*pycpp_a.begin())>, "
+                      "std::decay_t<decltype(*pycpp_b.begin())>>> pycpp_r; "
+                      "auto pycpp_ia = pycpp_a.begin(); auto pycpp_ib = pycpp_b.begin(); "
+                      "for (; pycpp_ia != pycpp_a.end() && pycpp_ib != pycpp_b.end(); ++pycpp_ia, ++pycpp_ib) "
+                      "pycpp_r.push_back({*pycpp_ia, *pycpp_ib}); return pycpp_r; }()";
+            return;
+        }
         else if (function_name == "zip") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { ";
+                output << lambdaCapture() << "() { ";
                 // Simplified zip implementation
-                output << "// zip placeholder - returns empty vector ";
+                output << "/* zip() takes exactly two arguments */ ";
                 output << "return std::vector<std::tuple<>>(); }()";
             }
             else {
@@ -1651,7 +1732,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "map") {
             if (call_expr->arguments.size() >= 2) {
-                output << "[]() { auto& container = ";
+                output << lambdaCapture() << "() { auto&& container =  ";
                 generateExpression(call_expr->arguments[1].get());
                 output << "; std::vector<decltype(";
                 generateExpression(call_expr->arguments[0].get());
@@ -1667,9 +1748,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "filter") {
             if (call_expr->arguments.size() >= 2) {
-                output << "[]() { auto& container = ";
+                output << lambdaCapture() << "() { auto&& container =  ";
                 generateExpression(call_expr->arguments[1].get());
-                output << "; std::vector<decltype(*container.begin())> result; ";
+                output << "; std::vector<std::decay_t<decltype(*container.begin())>> result; ";
                 output << "for(auto& elem : container) { if(";
                 generateExpression(call_expr->arguments[0].get());
                 output << "(elem)) result.push_back(elem); } return result; }()";
@@ -1696,9 +1777,25 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
+        else if (function_name == "randint" && call_expr->arguments.size() >= 2) {
+            useRuntime();   // inclusive on both ends, like Python
+            output << "pycpp::randint(";
+            generateExpression(call_expr->arguments[0].get());
+            output << ", ";
+            generateExpression(call_expr->arguments[1].get());
+            output << ")";
+            return;
+        }
+        else if (function_name == "choice" && call_expr->arguments.size() == 1) {
+            useRuntime();
+            output << lambdaCapture() << "() { auto&& pycpp_c = ";
+            generateExpression(call_expr->arguments[0].get());
+            output << "; return pycpp_c[pycpp::randint(0, static_cast<int>(pycpp_c.size()) - 1)]; }()";
+            return;
+        }
         else if (function_name == "randint") {
             if (call_expr->arguments.size() >= 2) {
-                output << "[]() { return rand() % (";
+                output << lambdaCapture() << "() { return rand() % (";
                 generateExpression(call_expr->arguments[1].get());
                 output << " - ";
                 generateExpression(call_expr->arguments[0].get());
@@ -1713,7 +1810,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "choice") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { auto& container = ";
+                output << lambdaCapture() << "() { auto&& container =  ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; return container[rand() % container.size()]; }()";
             }
@@ -1724,9 +1821,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "shuffle") {
             if (call_expr->arguments.size() > 0) {
-                output << "[]() { auto tmp = ";
+                output << lambdaCapture() << "() { auto tmp = ";
                 generateExpression(call_expr->arguments[0].get());
-                output << "; std::random_shuffle(tmp.begin(), tmp.end()); return tmp; }()";
+                output << "; std::shuffle(tmp.begin(), tmp.end(), std::mt19937(std::random_device{}())); return tmp; }()";
             }
             else {
                 output << "std::vector<int>()";
@@ -1827,6 +1924,17 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
         }
 
+        if (bin_op->op == "in" || bin_op->op == "not in") {
+            useRuntime();
+            output << (bin_op->op == "in" ? "pycpp::contains(" : "!pycpp::contains(");
+            if (dynamic_cast<ListLiteral*>(bin_op->right.get())) output << "std::vector";
+            generateExpression(bin_op->right.get());
+            output << ", ";
+            generateExpression(bin_op->left.get());
+            output << ")";
+            return;
+        }
+
         std::unordered_map<std::string, std::string> operator_map = {
             {"and", "&&"},
             {"or", "||"},
@@ -1839,6 +1947,18 @@ void CodeGenerator::generateExpression(Expr* expr) {
             output << "(";
             generateExpression(bin_op->left.get());
             output << " " << it->second << " ";
+            generateExpression(bin_op->right.get());
+            output << ")";
+            return;
+        }
+
+        if (bin_op->op == "/" || bin_op->op == "//" || bin_op->op == "%" || bin_op->op == "**") {
+            useRuntime();
+            output << (bin_op->op == "/"  ? "pycpp::truediv("
+                     : bin_op->op == "//" ? "pycpp::floordiv("
+                     : bin_op->op == "%"  ? "pycpp::mod(" : "pycpp::power(");
+            generateExpression(bin_op->left.get());
+            output << ", ";
             generateExpression(bin_op->right.get());
             output << ")";
             return;
@@ -1859,6 +1979,20 @@ void CodeGenerator::generateExpression(Expr* expr) {
             output << "static_cast<int>(";
             generateExpression(bin_op->left.get());
             output << " / ";
+            generateExpression(bin_op->right.get());
+            output << ")";
+            return;
+        }
+
+        if (bin_op->op == "//=" || bin_op->op == "%=" || bin_op->op == "**=") {
+            // `x //= y` must not be emitted as-is: in C++ that starts a comment
+            useRuntime();
+            generateExpression(bin_op->left.get());
+            output << " = "
+                   << (bin_op->op == "//=" ? "pycpp::floordiv("
+                       : bin_op->op == "%=" ? "pycpp::mod(" : "pycpp::power(");
+            generateExpression(bin_op->left.get());
+            output << ", ";
             generateExpression(bin_op->right.get());
             output << ")";
             return;
@@ -1957,7 +2091,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         output << formatDouble(float_lit->value);
     }
     else if (auto str_lit = dynamic_cast<StringLiteral*>(expr)) {
-        output << "\"" << str_lit->value << "\"";
+        output << "\"" << cppEscape(str_lit->value) << "\"";
     }
     else if (auto bool_lit = dynamic_cast<BoolLiteral*>(expr)) {
         output << (bool_lit->value ? "true" : "false");
@@ -2332,7 +2466,7 @@ void CodeGenerator::visit(FloatLiteral& node) {
 }
 
 void CodeGenerator::visit(StringLiteral& node) {
-    output << "\"" << node.value << "\"";
+    output << "\"" << cppEscape(node.value) << "\"";
 }
 
 void CodeGenerator::visit(BoolLiteral& node) {
@@ -2358,6 +2492,7 @@ void CodeGenerator::visit(UnaryOp& node) {
     }
     else {
         output << node.op;
+        if (dynamic_cast<UnaryOp*>(node.operand.get())) output << ' ';
         generateExpression(node.operand.get());
     }
 }

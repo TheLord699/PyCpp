@@ -33,6 +33,11 @@ private:
     bool needs_utility = false; // set when generated code uses std::move
     int defer_counter = 0, match_counter = 0;
     bool class_is_polymorphic = false;
+
+    // Builtins such as sorted()/enumerate()/input() expand to immediately-invoked
+    // lambdas. Inside a function they must capture locals; at namespace scope a
+    // capture-default is not allowed.
+    const char* lambdaCapture() const { return current_function ? "[&]" : "[]"; }
     void useRuntime();          // generated code needs pycpp_runtime.h
 
     void pushScope();

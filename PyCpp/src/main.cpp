@@ -239,6 +239,18 @@ std::unique_ptr<Program> loadModule(const std::string& file) {
 // base class that lives in another module.
 void generateMultiFileOutput(const std::vector<std::string>& files, const std::string& tempDir, bool verbose) {
     std::vector<std::pair<std::string, std::unique_ptr<Program>>> modules;
+    {
+        // Imports are by name, and generated files are named after the module, so two
+        // different files with the same name cannot coexist.
+        std::map<std::string, std::string> stems;
+        for (const auto& file : files) {
+            const std::string stem = std::filesystem::path(file).stem().string();
+            auto inserted = stems.emplace(stem, file);
+            if (!inserted.second && inserted.first->second != file)
+                throw std::runtime_error("modules '" + inserted.first->second + "' and '" + file +
+                    "' share the name '" + stem + "'; imports are by name, so rename one of them");
+        }
+    }
     for (const auto& file : files) {
         if (verbose) TerminalFormatter::printInfo("Processing: " + file);
         auto ast = loadModule(file);
@@ -318,6 +330,9 @@ static void explainBuildFailure(const std::vector<std::string>& log, const std::
     pycpp::emit(d);
 }
 
+// Exit code of the program that was built and run; becomes pycpp's own exit code.
+static int g_programExitCode = 0;
+
 // Compile the generated C++ with the selected compiler, then run the result.
 // Returns true when the program was built and started.
 bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles,
@@ -369,6 +384,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
         return false;
     }
     TerminalFormatter::printExitCode(exitCode);
+    g_programExitCode = exitCode;
     return true;
 }
 
@@ -749,5 +765,5 @@ int main(int argc, char* argv[]) {
     }
 
     bool success = compileFile(inputFile, outputBase, verbose, keepTemp, noCompile, singleFile, importPaths, compiler, linkerFlags, buildOnly); // --- ADDED linkerFlags ---
-    return success ? 0 : 1;
+    return success ? g_programExitCode : 1;
 }

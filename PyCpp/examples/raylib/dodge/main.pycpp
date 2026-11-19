@@ -1,6 +1,7 @@
+use <raylib.h>
+
 from player import Player
 from enemy import Enemy
-use <raylib.h>
 
 def main() -> int:
     SetConfigFlags(FLAG_VSYNC_HINT)

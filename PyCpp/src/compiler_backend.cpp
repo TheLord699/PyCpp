@@ -60,6 +60,7 @@ int exitCodeFromStatus(int status) {
     return status;
 #else
     if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return -1;
 #endif
 }

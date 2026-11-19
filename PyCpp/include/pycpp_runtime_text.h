@@ -8,9 +8,11 @@ inline const char* const kPycppRuntime = R"PYCPP(#ifndef PYCPP_RUNTIME_H
 #define PYCPP_RUNTIME_H
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -84,6 +86,10 @@ inline bool parse_bool(const std::string& raw) {
     fail("ValueError", "cannot convert '" + raw + "' to bool");
 }
 
+template <class T> std::string to_str(const T& v);
+template <class T> std::string to_repr(const T& v);
+template <class C> std::string container_str(const C& c);
+
 template <class T>
 std::string to_str(const T& v) {
     if constexpr (is_text<T>) return std::string(v);
@@ -100,7 +106,123 @@ std::string to_str(const T& v) {
         if (s.find_first_of(".en") == std::string::npos) s += ".0";
         return s;
     } else {
-        std::ostringstream o; o << v; return o.str();
+        if constexpr (requires { v.begin(); v.end(); }) return container_str(v);
+        else { std::ostringstream o; o << v; return o.str(); }
+    }
+}
+
+// Text of an element inside a container: strings are quoted, like Python's repr()
+template <class T>
+std::string to_repr(const T& v) {
+    if constexpr (is_text<T>) return "'" + std::string(v) + "'";
+    else if constexpr (std::is_same_v<T, char>) return "'" + std::string(1, v) + "'";
+    else return to_str(v);
+}
+
+// [1, 2, 3]  /  {'a': 1}  /  {1, 2}
+template <class C>
+std::string container_str(const C& c) {
+    constexpr bool is_map = requires { typename C::mapped_type; };
+    constexpr bool is_set = requires { typename C::key_type; } && !is_map;
+    std::string out = (is_map || is_set) ? "{" : "[";
+    bool first = true;
+    for (const auto& item : c) {
+        if (!first) out += ", ";
+        first = false;
+        if constexpr (is_map) out += to_repr(item.first) + ": " + to_repr(item.second);
+        else out += to_repr(item);
+    }
+    out += (is_map || is_set) ? "}" : "]";
+    return out;
+}
+
+// a / b: true division. Integers give a double (7 / 2 == 3.5).
+template <class A, class B>
+constexpr auto truediv(A a, B b) {
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        if (b == 0) fail("ZeroDivisionError", "division by zero");
+        return static_cast<double>(a) / static_cast<double>(b);
+    } else {
+        return a / b;
+    }
+}
+
+// a // b: floor division (rounds toward negative infinity)
+template <class A, class B>
+constexpr auto floordiv(A a, B b) {
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        if (b == 0) fail("ZeroDivisionError", "integer division by zero");
+        auto q = a / b;
+        if ((a % b != 0) && ((a < 0) != (b < 0))) --q;
+        return q;
+    } else {
+        if (b == 0) fail("ZeroDivisionError", "float floor division by zero");
+        return std::floor(static_cast<double>(a) / static_cast<double>(b));
+    }
+}
+
+// a % b: the result has the sign of b, like Python
+template <class A, class B>
+constexpr auto mod(A a, B b) {
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        if (b == 0) fail("ZeroDivisionError", "integer modulo by zero");
+        auto r = a % b;
+        if (r != 0 && ((r < 0) != (b < 0))) r += b;
+        return r;
+    } else {
+        if (b == 0) fail("ZeroDivisionError", "float modulo by zero");
+        auto r = std::fmod(a, b);
+        if (r != 0 && ((r < 0) != (b < 0))) r += b;
+        return r;
+    }
+}
+
+// a ** b: integers stay integers
+template <class A, class B>
+constexpr auto power(A a, B b) {
+    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
+        if (b < 0) return static_cast<long long>(std::pow(static_cast<double>(a), static_cast<double>(b)));
+        long long result = 1, base = static_cast<long long>(a);
+        auto e = b;
+        while (e > 0) { if (e & 1) result *= base; base *= base; e >>= 1; }
+        return result;
+    } else {
+        return std::pow(a, b);
+    }
+}
+
+// bin()/oct()/hex(): Python-style text such as "0b101" or "-0xff"
+template <class T>
+std::string to_base(T value, unsigned base, const char* prefix) {
+    unsigned long long u = static_cast<unsigned long long>(value);
+    bool negative = false;
+    if constexpr (std::is_signed_v<T>) {
+        if (value < 0) { negative = true; u = 0ULL - static_cast<unsigned long long>(value); }
+    }
+    std::string digits;
+    do { digits.push_back("0123456789abcdef"[u % base]); u /= base; } while (u != 0);
+    std::reverse(digits.begin(), digits.end());
+    return std::string(negative ? "-" : "") + prefix + digits;
+}
+
+// randint(lo, hi): both ends included
+inline int randint(int lo, int hi) {
+    static std::mt19937 gen{std::random_device{}()};
+    if (lo > hi) std::swap(lo, hi);
+    return std::uniform_int_distribution<int>(lo, hi)(gen);
+}
+
+// `x in container`: substring test for text, key test for map/set, element test otherwise
+template <class C, class T>
+bool contains(const C& c, const T& v) {
+    if constexpr (is_text<C>) {
+        const std::string hay(c);
+        if constexpr (is_text<T>) return hay.find(std::string(v)) != std::string::npos;
+        else return hay.find(v) != std::string::npos;
+    } else if constexpr (requires { c.find(v); }) {
+        return c.find(v) != c.end();
+    } else {
+        return std::find(c.begin(), c.end(), v) != c.end();
     }
 }
 

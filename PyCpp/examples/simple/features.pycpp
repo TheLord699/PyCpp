@@ -1,0 +1,36 @@
+def main() -> int:
+    print("--- Escapes ---")
+    print("tab:\tquote: \"hi\"\nsecond line")
+
+    print("--- Conditional expression ---")
+    n: int = 7
+    label: str = "odd" if n % 2 == 1 else "even"
+    print(label)
+
+    print("--- in ---")
+    nums: list[int] = [3, 1, 2]
+    if 2 in nums:
+        print("found 2")
+    if 9 not in nums:
+        print("no 9")
+    if "ell" in "hello":
+        print("substring")
+
+    print("--- Literals ---")
+    print(0xFF)
+    print(0b101)
+    print(1.5e2)
+    print(bin(10))
+    print(hex(255))
+    print(oct(8))
+
+    print("--- Builtins ---")
+    print(sum(range(5)))
+    print(min(nums))
+    print(max(nums))
+    ordered: list[int] = sorted(nums)
+    print(ordered[0])
+    r: int = randint(1, 6)
+    print(r >= 1 and r <= 6)
+
+    return 0

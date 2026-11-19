@@ -40,6 +40,13 @@ Supported syntax:
 - `for`, `while` — loops.
 - `break`, `continue`, `return` — flow control.
 - `assert` — runtime check with an optional message: `assert x > 0, "x must be positive"`. Compiles to C++ `assert` (disabled by `NDEBUG`).
+- Conditional expressions: `label: str = "odd" if n % 2 == 1 else "even"`.
+- Membership tests: `x in items` / `x not in items` (list, dict and set membership, substring test for `str`).
+- Number literals: hex (`0xFF`), binary (`0b101`) and exponent floats (`1.5e3`). `bin()`, `oct()` and `hex()` return Python-style strings such as `"0b101"`.
+- Python arithmetic: `/` is true division (`7 / 2` is `3.5`), `//` floors (`-7 // 2` is `-4`), `%` takes the sign of the divisor, and `**` on integers stays an integer. Dividing by zero stops the program with `ZeroDivisionError`.
+- `print()` writes Python-style text: `True` / `False`, floats such as `3.0` and `0.1`, and `[1, 2]` / `{'a': 1}` for containers.
+- `list()`, `dict()` and `set()` create empty collections, typed by the declaration: `d: dict[str, int] = dict()`.
+- `pycpp` exits with the exit code of the program it ran.
 
 Example:
 

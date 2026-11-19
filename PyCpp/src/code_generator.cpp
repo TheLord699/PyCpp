@@ -314,6 +314,15 @@ static std::string cppEscape(const std::string& raw) {
     return out;
 }
 
+// Exceptions the runtime provides (user classes may derive from them)
+static bool isBuiltinExceptionName(const std::string& name) {
+    static const std::set<std::string> names = {
+        "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
+        "LookupError", "IndexError", "KeyError", "ValueError", "TypeError", "RuntimeError"
+    };
+    return names.count(name) > 0;
+}
+
 CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
     scopes.emplace_back(); // global scope
 }
@@ -782,6 +791,15 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
     size_t consumed = 0;
     if (is_constructor) {
         collectConstructorInitializers(func, inits, consumed);
+        if (current_class && isBuiltinExceptionName(current_class->base_class)) {
+            for (const auto& p : func->parameters) {
+                if (p.name == "self" || !p.type) continue;
+                auto basic = dynamic_cast<BasicType*>(p.type.get());
+                if (basic && (basic->name == "std::string" || basic->name == "str"))
+                    inits.insert(inits.begin(), { current_class->base_class, p.name });
+                break;   // only the first real parameter can be the message
+            }
+        }
         if (!inits.empty()) {
             output << "\n" << getIndent() << "    : ";
             for (size_t i = 0; i < inits.size(); ++i) {
@@ -948,6 +966,7 @@ void CodeGenerator::generateClass(ClassDef* cls) {
     generateTemplateHeader(cls->type_params);
     const bool saved_poly = class_is_polymorphic;
     class_is_polymorphic = !cls->base_class.empty() || pycpp::hasSubclasses(cls->name);
+    if (isBuiltinExceptionName(cls->base_class)) useRuntime();
     output << getIndent() << "class " << cls->name;
 
     if (!cls->base_class.empty()) {
@@ -2576,6 +2595,90 @@ void CodeGenerator::visit(DeferStmt& node) {
     for (auto& s : node.body) generateStatement(s.get());
     popScope(); dedent();
     output << getIndent() << "});\n";
+}
+
+// ===== try / except / else / finally / raise =====
+// try/except become C++ try/catch. `finally` is a pycpp::Defer object declared first, so
+// it is destroyed last: it runs after the handlers, on return/break/continue, and while
+// an exception propagates. `else` runs when the try body finished without throwing.
+void CodeGenerator::visit(TryStmt& node) {
+    useRuntime();
+    const int id = ++try_counter;
+    const std::string ok = "pycpp_try_ok_" + std::to_string(id);
+    const bool has_else = !node.else_body.empty();
+
+    auto emitBody = [&](const std::vector<std::unique_ptr<Stmt>>& body, const std::string& tail = "") {
+        indent(); pushScope();
+        for (auto& s : body) generateStatement(s.get());
+        if (!tail.empty()) output << getIndent() << tail << "\n";
+        popScope(); dedent();
+    };
+
+    output << getIndent() << "{\n";
+    indent();
+
+    if (!node.finally_body.empty()) {
+        output << getIndent() << "pycpp::Defer pycpp_finally_" << id << "([&]() {\n";
+        emitBody(node.finally_body);
+        output << getIndent() << "});\n";
+    }
+    if (has_else) output << getIndent() << "bool " << ok << " = false;\n";
+
+    // `try { }` with no catch is not valid C++ (a try/finally has no handlers)
+    output << getIndent() << (node.handlers.empty() ? "{\n" : "try {\n");
+    emitBody(node.body, has_else ? ok + " = true;" : "");
+    output << getIndent() << "}\n";
+
+    for (auto& h : node.handlers) {
+        std::vector<std::string> types = h.type_names;
+        if (types.empty()) types.push_back("");          // `except:` -> catch (...)
+        for (const auto& type : types) {                 // except (A, B): one catch per type
+            output << getIndent() << "catch (";
+            if (type.empty()) {
+                output << "...";
+            }
+            else {
+                output << "const " << type << "&";
+                if (!h.var_name.empty()) output << " " << h.var_name;
+            }
+            output << ") {\n";
+            indent(); pushScope();
+            if (!h.var_name.empty()) declareVar(h.var_name, nullptr);
+            handler_vars.push_back(h.var_name);
+            for (auto& s : h.body) generateStatement(s.get());
+            handler_vars.pop_back();
+            popScope(); dedent();
+            output << getIndent() << "}\n";
+        }
+    }
+
+    if (has_else) {
+        output << getIndent() << "if (" << ok << ") {\n";
+        emitBody(node.else_body);
+        output << getIndent() << "}\n";
+    }
+
+    dedent();
+    output << getIndent() << "}\n";
+}
+
+void CodeGenerator::visit(RaiseStmt& node) {
+    useRuntime();
+    output << getIndent();
+    if (!node.value) {
+        output << "throw;\n";                             // re-raise the exception being handled
+        return;
+    }
+    if (auto id = dynamic_cast<Identifier*>(node.value.get())) {
+        bool is_handler_var = false;
+        for (const auto& v : handler_vars) if (!v.empty() && v == id->name) is_handler_var = true;
+        if (is_handler_var) output << "throw;\n";         // raise e
+        else output << "throw " << id->name << "();\n";   // raise MyError
+        return;
+    }
+    output << "throw ";
+    generateExpression(node.value.get());
+    output << ";\n";
 }
 
 // ===== match / case =====

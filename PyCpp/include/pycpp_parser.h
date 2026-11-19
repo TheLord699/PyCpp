@@ -73,6 +73,8 @@ public:
     std::unique_ptr<ContinueStmt> parseContinueStmt();
     std::unique_ptr<Stmt> parseAssertStmt();
     std::unique_ptr<Stmt> parseDeferStmt();
+    std::unique_ptr<Stmt> parseTryStmt();
+    std::unique_ptr<Stmt> parseRaiseStmt();
     std::unique_ptr<Stmt> parseMatchStmt();
 
     // Import and use statements

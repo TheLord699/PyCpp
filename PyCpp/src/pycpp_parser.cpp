@@ -492,6 +492,8 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     }
 
     if (check(TokenType::DEFER)) { advance(); return parseDeferStmt(); }
+    if (check(TokenType::TRY)) { advance(); return parseTryStmt(); }
+    if (check(TokenType::RAISE)) { advance(); return parseRaiseStmt(); }
     if (check(TokenType::MATCH)) { advance(); return parseMatchStmt(); }
 
     // assert cond[, "message"]
@@ -2333,6 +2335,84 @@ std::unique_ptr<Stmt> PyCppParser::parseAssertStmt() {
     stmt->column = keyword.column;
     match(TokenType::NEWLINE);
     return stmt;
+}
+
+// try:        <block>
+// except T as e:  <block>      (T may be (A, B); the whole clause may be just `except:`)
+// else:       <block>
+// finally:    <block>
+std::unique_ptr<Stmt> PyCppParser::parseTryStmt() {
+    auto t = std::make_unique<TryStmt>();
+    t->line = tokens[position - 1].line;
+    t->column = tokens[position - 1].column;
+
+    // ':' then either an indented block or a single statement on the same line
+    auto suite = [&](const std::string& what) {
+        consume(TokenType::COLON, "Expected ':' after " + what);
+        std::vector<std::unique_ptr<Stmt>> body;
+        if (check(TokenType::NEWLINE)) {
+            advance();
+            body = parseBlock();
+        }
+        else if (auto s = parseStatement()) {
+            body.push_back(std::move(s));
+        }
+        return body;
+    };
+
+    t->body = suite("'try'");
+    handleIndentation();
+
+    while (check(TokenType::EXCEPT)) {
+        ExceptClause c;
+        Token keyword = advance();
+        c.line = keyword.line;
+        c.column = keyword.column;
+        if (!check(TokenType::COLON)) {
+            if (match(TokenType::LPAREN)) {
+                do {
+                    c.type_names.push_back(consume(TokenType::IDENTIFIER, "Expected an exception type").value);
+                } while (match(TokenType::COMMA));
+                consume(TokenType::RPAREN, "Expected ')' after exception types");
+            }
+            else {
+                c.type_names.push_back(consume(TokenType::IDENTIFIER, "Expected an exception type").value);
+            }
+            if (match(TokenType::AS)) {
+                c.var_name = consume(TokenType::IDENTIFIER, "Expected a name after 'as'").value;
+            }
+        }
+        c.body = suite("'except'");
+        handleIndentation();
+        t->handlers.push_back(std::move(c));
+    }
+
+    if (!t->handlers.empty() && check(TokenType::ELSE)) {
+        advance();
+        t->else_body = suite("'else'");
+        handleIndentation();
+    }
+
+    if (match(TokenType::FINALLY)) {
+        t->finally_body = suite("'finally'");
+    }
+
+    if (t->handlers.empty() && t->finally_body.empty()) {
+        throw std::runtime_error("'try' needs at least one 'except' or a 'finally'");
+    }
+    return t;
+}
+
+// raise Type("message")  |  raise Type  |  raise
+std::unique_ptr<Stmt> PyCppParser::parseRaiseStmt() {
+    auto r = std::make_unique<RaiseStmt>();
+    r->line = tokens[position - 1].line;
+    r->column = tokens[position - 1].column;
+    if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !atEnd()) {
+        r->value = parseExpression();
+    }
+    match(TokenType::NEWLINE);
+    return r;
 }
 
 // defer stmt      |      defer:  <indented block>

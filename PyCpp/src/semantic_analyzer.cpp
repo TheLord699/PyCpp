@@ -97,6 +97,11 @@ SemanticAnalyzer::SemanticAnalyzer()
     addSymbol("true", "bool");
     addSymbol("false", "bool");
     addSymbol("nullptr", "void*");
+    for (const char* name : { "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
+                              "LookupError", "IndexError", "KeyError", "ValueError", "TypeError",
+                              "RuntimeError" }) {
+        addSymbol(name, "class");
+    }
     for (const char* name : { "list", "dict", "set", "tuple" }) {
         addSymbol(name, "function");
     }
@@ -163,6 +168,15 @@ bool SemanticAnalyzer::symbolExistsInCurrentScope(const std::string& name) {
     return scopes.back().find(name) != scopes.back().end();
 }
 
+// Exception types provided by the runtime
+static bool isBuiltinException(const std::string& name) {
+    static const std::unordered_set<std::string> names = {
+        "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
+        "LookupError", "IndexError", "KeyError", "ValueError", "TypeError", "RuntimeError"
+    };
+    return names.count(name) > 0;
+}
+
 // Type Checking - FIXED
 bool SemanticAnalyzer::isValidType(const std::string& type) {
     static const std::unordered_set<std::string> valid_types = {
@@ -179,6 +193,10 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
     // Check pointer types ("T*" as produced by typeToString)
     if (!type.empty() && type.back() == '*') {
         return isValidType(type.substr(0, type.size() - 1));
+    }
+
+    if (isBuiltinException(type)) {
+        return true;
     }
 
     // Generic type parameters (T in def f[T] / class C[T])
@@ -755,6 +773,12 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
     else if (auto defer_stmt = dynamic_cast<DeferStmt*>(stmt)) {
         analyzeDeferStmt(defer_stmt);
     }
+    else if (auto try_stmt = dynamic_cast<TryStmt*>(stmt)) {
+        analyzeTryStmt(try_stmt);
+    }
+    else if (auto raise_stmt = dynamic_cast<RaiseStmt*>(stmt)) {
+        analyzeRaiseStmt(raise_stmt);
+    }
     else if (auto match_stmt = dynamic_cast<MatchStmt*>(stmt)) {
         analyzeMatchStmt(match_stmt);
     }
@@ -1188,6 +1212,62 @@ void SemanticAnalyzer::analyzeMatchStmt(MatchStmt* m) {
         for (auto& s : c.body) analyzeStatement(s.get());
         exitScope();
     }
+}
+
+void SemanticAnalyzer::analyzeTryStmt(TryStmt* t) {
+    if (!current_function)
+        error("'try' can only be used inside a function", t->line, t->column,
+              "put the try statement inside a def");
+
+    enterScope();
+    for (auto& s : t->body) analyzeStatement(s.get());
+    exitScope();
+
+    for (auto& h : t->handlers) {
+        for (const auto& name : h.type_names) {
+            if (!isBuiltinException(name) && !classes.count(name) && !findSymbol(name))
+                warning("unknown exception type '" + name + "'", h.line, h.column,
+                        "use a built-in one (Exception, ValueError, ZeroDivisionError, ...) "
+                        "or define it with: class " + name + "(Exception)");
+        }
+        enterScope();
+        if (!h.var_name.empty())
+            addSymbol(h.var_name, h.type_names.size() == 1 ? h.type_names[0] : std::string("Exception"), true);
+        handler_depth++;
+        for (auto& s : h.body) analyzeStatement(s.get());
+        handler_depth--;
+        exitScope();
+    }
+
+    if (!t->else_body.empty()) {
+        enterScope();
+        for (auto& s : t->else_body) analyzeStatement(s.get());
+        exitScope();
+    }
+
+    for (auto& s : t->finally_body) {
+        if (dynamic_cast<ReturnStmt*>(s.get()) || dynamic_cast<BreakStmt*>(s.get()) ||
+            dynamic_cast<ContinueStmt*>(s.get()))
+            error("'return', 'break' and 'continue' are not allowed directly inside a finally block",
+                  s->line, s->column);
+    }
+    enterScope();
+    for (auto& s : t->finally_body) analyzeStatement(s.get());
+    exitScope();
+}
+
+void SemanticAnalyzer::analyzeRaiseStmt(RaiseStmt* r) {
+    if (!current_function)
+        error("'raise' can only be used inside a function", r->line, r->column);
+    // A function that ends in `raise` does not need a return value
+    current_function->has_return = true;
+    if (!r->value) {
+        if (handler_depth == 0)
+            error("'raise' with no exception to re-raise", r->line, r->column,
+                  "use `raise ValueError(\"message\")`, or put a bare `raise` inside an except block");
+        return;
+    }
+    analyzeExpression(r->value.get());
 }
 
 // Visitor pattern implementations (delegate to analysis methods)

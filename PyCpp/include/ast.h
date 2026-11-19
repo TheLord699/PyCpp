@@ -343,6 +343,29 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// except [Type | (Type, Type)] [as name]:
+struct ExceptClause {
+    std::vector<std::string> type_names;   // empty: `except:` catches everything
+    std::string var_name;                  // `as e`; empty when absent
+    std::vector<std::unique_ptr<Stmt>> body;
+    int line = 0, column = 0;
+};
+
+class TryStmt : public Stmt {
+public:
+    std::vector<std::unique_ptr<Stmt>> body;
+    std::vector<ExceptClause> handlers;
+    std::vector<std::unique_ptr<Stmt>> else_body;
+    std::vector<std::unique_ptr<Stmt>> finally_body;
+    void accept(ASTVisitor& visitor) override;
+};
+
+class RaiseStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> value;           // null: bare `raise` (re-raise)
+    void accept(ASTVisitor& visitor) override;
+};
+
 class Program : public ASTNode {
 public:
     std::vector<std::unique_ptr<Stmt>> statements;
@@ -401,6 +424,8 @@ public:
     // Non-pure so visitors that don't care keep compiling
     virtual void visit(MatchStmt&) {}
     virtual void visit(DeferStmt&) {}
+    virtual void visit(TryStmt&) {}
+    virtual void visit(RaiseStmt&) {}
 };
 
 #endif

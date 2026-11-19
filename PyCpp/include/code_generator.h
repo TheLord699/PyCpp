@@ -38,6 +38,9 @@ private:
     // lambdas. Inside a function they must capture locals; at namespace scope a
     // capture-default is not allowed.
     const char* lambdaCapture() const { return current_function ? "[&]" : "[]"; }
+
+    std::vector<std::string> handler_vars;   // names bound by the `except ... as e` clauses being generated
+    int try_counter = 0;
     void useRuntime();          // generated code needs pycpp_runtime.h
 
     void pushScope();
@@ -108,6 +111,8 @@ public:
     void visit(UseStmt& node) override;
     void visit(DeferStmt& node) override;
     void visit(MatchStmt& node) override;
+    void visit(TryStmt& node) override;
+    void visit(RaiseStmt& node) override;
 
     void visit(IntLiteral& node) override;
     void visit(FloatLiteral& node) override;

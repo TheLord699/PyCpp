@@ -83,6 +83,9 @@ private:
 
     void analyzeDeferStmt(DeferStmt* d);
     void analyzeMatchStmt(MatchStmt* m);
+    void analyzeTryStmt(TryStmt* t);
+    void analyzeRaiseStmt(RaiseStmt* r);
+    int handler_depth = 0;   // > 0 while analysing the body of an except clause
 
     // NEW: Import statement analysis
     void analyzeImportStmt(ImportStmt* import);

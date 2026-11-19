@@ -47,6 +47,18 @@ Supported syntax:
 - `print()` writes Python-style text: `True` / `False`, floats such as `3.0` and `0.1`, and `[1, 2]` / `{'a': 1}` for containers.
 - `list()`, `dict()` and `set()` create empty collections, typed by the declaration: `d: dict[str, int] = dict()`.
 - `pycpp` exits with the exit code of the program it ran.
+- Exceptions: `try` / `except` / `else` / `finally` and `raise`.
+  ```
+  def main() -> int:
+      try:
+          n: int = int("abc")
+      except (ValueError, TypeError) as e:
+          print(e)
+      finally:
+          print("done")
+      return 0
+  ```
+  Built-in exceptions: `Exception`, `ArithmeticError`, `ZeroDivisionError`, `OverflowError`, `LookupError`, `IndexError`, `KeyError`, `ValueError`, `TypeError`, `RuntimeError`. Define your own with `class MyError(Exception):`; a leading `str` parameter of its `__init__` becomes its message. Errors such as `int("abc")` and `1 / 0` raise catchable exceptions; uncaught, they print `ValueError: message` and exit with code 1. A variable declared inside a `try` body is not visible after it, so declare it before the `try`.
 
 Example:
 
@@ -251,8 +263,7 @@ Supported:
 
 Future enhancements:
 
-- Exception handling.
-- `try` / `except`.
+- `super()` for custom exception classes.
 - Additional iteration utilities.
 
 # **7. Classes and Object-Oriented Programming**
@@ -664,7 +675,7 @@ Potential future features include:
 
 - List comprehensions.
 - Slicing.
-- Exception handling.
+- Exception chaining (`raise ... from ...`).
 - Function overloading.
 - Type inference.
 - Ownership and move semantics.

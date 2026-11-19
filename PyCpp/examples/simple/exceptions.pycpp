@@ -1,0 +1,55 @@
+class AppError(Exception):
+    def __init__(self, message: str):
+        self.code: int = 7
+
+def risky(n: int) -> int:
+    if n < 0:
+        raise ValueError("negative number")
+    if n == 0:
+        raise AppError("zero is not allowed")
+    return 100 // n
+
+def main() -> int:
+    values: list[int] = [5, -1, 0]
+    for n in values:
+        try:
+            print(risky(n))
+        except ValueError as e:
+            print("ValueError:", e)
+        except AppError as e:
+            print("AppError:", e)
+        finally:
+            print("done")
+
+    try:
+        zero: int = 0
+        print(10 / zero)
+    except ZeroDivisionError as e:
+        print(e)
+
+    try:
+        number: int = int("abc")
+        print(number)
+    except (ValueError, TypeError):
+        print("not a number")
+
+    try:
+        parsed: int = int("42")
+        print(parsed)
+    except ValueError:
+        print("bad")
+    else:
+        print("parsed ok")
+    finally:
+        print("cleanup")
+
+    try:
+        try:
+            raise RuntimeError("inner")
+        except RuntimeError as e:
+            print("caught inner")
+            raise
+    except Exception as e:
+        print("caught outer:", e)
+
+    return 0

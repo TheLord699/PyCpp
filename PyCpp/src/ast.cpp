@@ -169,6 +169,14 @@ void MatchStmt::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }
 
+void TryStmt::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+void RaiseStmt::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
 void DeferStmt::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }

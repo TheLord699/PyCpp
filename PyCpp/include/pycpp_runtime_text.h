@@ -9,6 +9,7 @@ inline const char* const kPycppRuntime = R"PYCPP(#ifndef PYCPP_RUNTIME_H
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -20,10 +21,51 @@ inline const char* const kPycppRuntime = R"PYCPP(#ifndef PYCPP_RUNTIME_H
 
 namespace pycpp {
 
+// PyCPP exceptions. They deliberately do not derive from std::exception, so the runtime's
+// own `catch (const std::exception&)` blocks (e.g. around std::stoll) never swallow them.
+class Exception {
+public:
+    Exception() = default;
+    explicit Exception(std::string message) : msg_(std::move(message)) {}
+    virtual ~Exception() = default;
+    const char* what() const noexcept { return msg_.c_str(); }
+    virtual const char* name() const { return "Exception"; }
+private:
+    std::string msg_;
+};
+class ArithmeticError : public Exception { public: using Exception::Exception; const char* name() const override { return "ArithmeticError"; } };
+class ZeroDivisionError : public ArithmeticError { public: using ArithmeticError::ArithmeticError; const char* name() const override { return "ZeroDivisionError"; } };
+class OverflowError : public ArithmeticError { public: using ArithmeticError::ArithmeticError; const char* name() const override { return "OverflowError"; } };
+class LookupError : public Exception { public: using Exception::Exception; const char* name() const override { return "LookupError"; } };
+class IndexError : public LookupError { public: using LookupError::LookupError; const char* name() const override { return "IndexError"; } };
+class KeyError : public LookupError { public: using LookupError::LookupError; const char* name() const override { return "KeyError"; } };
+class ValueError : public Exception { public: using Exception::Exception; const char* name() const override { return "ValueError"; } };
+class TypeError : public Exception { public: using Exception::Exception; const char* name() const override { return "TypeError"; } };
+class RuntimeError : public Exception { public: using Exception::Exception; const char* name() const override { return "RuntimeError"; } };
+
+// Errors raised by the runtime itself (int("x"), 1 / 0, ...). Catchable with try/except.
 [[noreturn]] inline void fail(const char* kind, const std::string& message) {
-    std::fprintf(stderr, "%s: %s\n", kind, message.c_str());
-    std::exit(1);
+    const std::string k = kind;
+    if (k == "ZeroDivisionError") throw ZeroDivisionError(message);
+    if (k == "OverflowError") throw OverflowError(message);
+    if (k == "ValueError") throw ValueError(message);
+    if (k == "TypeError") throw TypeError(message);
+    throw RuntimeError(message);
 }
+
+// An exception nobody caught: print "ValueError: message" and exit 1, as before.
+inline const bool terminate_handler_installed = [] {
+    std::set_terminate([] {
+        if (auto active = std::current_exception()) {
+            try { std::rethrow_exception(active); }
+            catch (const Exception& e) { std::fprintf(stderr, "%s: %s\n", e.name(), e.what()); std::exit(1); }
+            catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); std::exit(1); }
+            catch (...) {}
+        }
+        std::abort();
+    });
+    return true;
+}();
 
 template <class T>
 inline constexpr bool is_text = std::is_convertible_v<const T&, std::string>;
@@ -129,6 +171,7 @@ template <class T>
 std::string to_str(const T& v) {
     if constexpr (is_text<T>) return std::string(v);
     else if constexpr (std::is_same_v<T, bool>) return v ? "True" : "False";
+    else if constexpr (std::is_base_of_v<Exception, T>) return v.what();
     else if constexpr (std::is_same_v<T, char>) return std::string(1, v);
     else if constexpr (std::is_integral_v<T>) return std::to_string(v);
     else if constexpr (std::is_floating_point_v<T>) {
@@ -267,6 +310,17 @@ public:
 template <class F> Defer(F) -> Defer<F>;
 
 } // namespace pycpp
+
+using pycpp::Exception;
+using pycpp::ArithmeticError;
+using pycpp::ZeroDivisionError;
+using pycpp::OverflowError;
+using pycpp::LookupError;
+using pycpp::IndexError;
+using pycpp::KeyError;
+using pycpp::ValueError;
+using pycpp::TypeError;
+using pycpp::RuntimeError;
 #endif
 )PYCPP";
 

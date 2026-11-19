@@ -16,7 +16,8 @@ public:
 
     void addSearchPath(const std::string& path);
     std::vector<std::string> resolveAllDependencies(const std::string& entry_file);
-    std::string findModuleFile(const std::string& module_name);
+    std::string findModuleFile(const std::string& module_name,
+                               const std::string& importing_file = "");
 
 private:
     void resolveDependenciesRecursive(const std::string& filename, std::vector<std::string>& result);

@@ -151,8 +151,7 @@ Use `*T` for explicit pointer access.
 
 ```
 def update_player(player: *Player) -> void:
-    unsafe:
-        player.health -= 10
+    player.health -= 10
 ```
 
 Pointers allow developers to perform lower-level operations when needed.
@@ -163,8 +162,7 @@ PyCPP also supports multiple pointer levels.
 
 ```
 def change_pointer(player: **Player) -> void:
-    unsafe:
-        ...
+    ...
 ```
 
 ### **4.6 Generic functions**
@@ -206,8 +204,7 @@ Memory can be allocated and freed explicitly.
 ```
 def main() -> int:
     player: *Player = mem.alloc[Player]()
-    unsafe:
-        player.health = 100
+    player.health = 100
     mem.free(player)
     return 0
 ```
@@ -390,16 +387,13 @@ class Player:
         self.health -= amount
 
 def damage_player(player: *Player, amount: int) -> void:
-    unsafe:
-        player.damage(amount)
+    player.damage(amount)
 
 def main() -> int:
     player: *Player = mem.alloc[Player]("Alex", 100)
 
     damage_player(player, 20)
-
-    unsafe:
-        print(player.health)
+    print(player.health)
 
     mem.free(player)
 
@@ -442,15 +436,13 @@ int main() {
 }
 ```
 
-What changes between the two PyCPP versions:
-
-| High level                                | Low level                                        | C++ (low level)                          |
-| ----------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
-| `name: str` (passed by value)             | `name: const &str` (immutable reference)         | `const std::string& name`                |
-| `player: Player = Player("Alex", 100)`    | `player: *Player = mem.alloc[Player](...)`       | `Player* player = new Player(...)`       |
-| `player.damage(20)`                       | `damage_player(player, 20)` taking `*Player`     | `player->damage(amount)`                 |
-| `player.health` (safe access)             | `unsafe:` block around pointer access            | `player->health`                         |
-| Destroyed automatically at end of scope   | `mem.free(player)` called explicitly             | `delete player;`                         |
+| High level | Low level | C++ (low level) |
+|---|---|---|
+| `name: str` (passed by value) | `name: const &str` (immutable reference) | `const std::string& name` |
+| `player: Player = Player("Alex", 100)` | `player: *Player = mem.alloc[Player](...)` | `Player* player = new Player(...)` |
+| `player.damage(20)` | `damage_player(player, 20)` taking `*Player` | `player->damage(20)` |
+| `player.health` (safe access) | `player.health` (pointer access) | `player->health` |
+| Destroyed automatically at end of scope | `mem.free(player)` called explicitly | `delete player;` |
 
 Notes:
 

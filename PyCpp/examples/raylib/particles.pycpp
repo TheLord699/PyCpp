@@ -1,0 +1,66 @@
+use <raylib.h>
+
+struct Particle:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    radius: float
+    color: Color
+
+def update_particle(p: &Particle, width: int, height: int) -> void:
+    p.x += p.vx
+    p.y += p.vy
+
+    if p.x - p.radius <= 0.0 or p.x + p.radius >= width:
+        p.vx = -p.vx
+    if p.y - p.radius <= 0.0 or p.y + p.radius >= height:
+        p.vy = -p.vy
+
+def main() -> int:
+    width: int = 800
+    height: int = 450
+    InitWindow(width, height, "PyCPP Particle Stress Test")
+    SetTargetFPS(60)
+
+    palette: list[Color] = [RED, ORANGE, GOLD, LIME, SKYBLUE, VIOLET, MAGENTA]
+    particles: list[Particle] = []
+
+    for i in range(150):
+        px: float = randint(40, width - 40)
+        py: float = randint(40, height - 40)
+        vx: float = randint(-5, 5)
+        vy: float = randint(-5, 5)
+        if vx == 0.0:
+            vx = 2.0
+        if vy == 0.0:
+            vy = -2.0
+        col: Color = palette[randint(0, len(palette) - 1)]
+        particles.append(Particle(px, py, vx, vy, randint(4, 10), col))
+
+    while not WindowShouldClose():
+        # Click anywhere to spawn a burst of 25 more particles!
+        if IsMouseButtonPressed(MOUSE_BUTTON_LEFT):
+            mx: float = GetMouseX()
+            my: float = GetMouseY()
+            for i in range(25):
+                vx: float = randint(-6, 6)
+                vy: float = randint(-6, 6)
+                col: Color = palette[randint(0, len(palette) - 1)]
+                particles.append(Particle(mx, my, vx, vy, randint(4, 9), col))
+
+        for i in range(len(particles)):
+            update_particle(particles[i], width, height)
+
+        BeginDrawing()
+        ClearBackground(BLACK)
+
+        for p in particles:
+            DrawCircle(p.x, p.y, p.radius, p.color)
+
+        DrawFPS(10, 10)
+        DrawText("Left-click to spawn more particles!", 10, 35, 20, RAYWHITE)
+        EndDrawing()
+
+    CloseWindow()
+    return 0

@@ -2505,9 +2505,21 @@ void CodeGenerator::visit(ForStmt& node) {
         }
     }
 
+    // Preserve the iterable's element type in the loop-variable scope. In particular,
+    // list[*T] must bind ptr as *T so member access emits ptr->field, not ptr.field.
+    Type* loop_element_type = nullptr;
+    if (node.var_names.size() <= 1 && node.iterable) {
+        TypeInfo iterable_info = exprTypeInfo(node.iterable.get());
+        if (iterable_info.known && iterable_info.elem) {
+            loop_element_type = iterable_info.elem;
+        }
+    }
+
     pushScope();
-    for (const auto& name : node.var_names) declareVar(name, nullptr);
-    if (node.var_names.empty()) declareVar(node.var_name, nullptr);
+    for (const auto& name : node.var_names) {
+        declareVar(name, node.var_names.size() <= 1 ? loop_element_type : nullptr);
+    }
+    if (node.var_names.empty()) declareVar(node.var_name, loop_element_type);
 
     if (node.var_names.size() > 1) {
         // for k, v in d.items(): -> for (auto& [k, v] : d)

@@ -669,6 +669,62 @@ error: line 3:5: syntax error: Expected expression, got: 'return'
 
 Syntax errors and type errors stop the build. The parser never skips a statement it cannot understand.
 
+## Examples and recently demonstrated syntax
+
+The `PyCpp/examples` directory contains runnable examples grouped by topic. The
+`run_all.ps1` script runs the console examples and, unless `-NoGui` is supplied,
+the Raylib demos. Supporting module files are compiled through their importing
+entry points rather than run independently.
+
+### Additional syntax and language features
+
+These are demonstrated in the examples:
+
+- `constexpr NAME: T = value` for compile-time constants.
+- Conditional expressions: `value = a if condition else b`.
+- Membership: `item in collection` and `item not in collection`, including string
+  substring checks.
+- Numeric literals: hexadecimal (`0xFF`), binary (`0b101`), and exponent
+  notation (`1.5e2`); conversion helpers `bin()`, `oct()`, and `hex()`.
+- Arithmetic: true division `/`, floor division `//`, modulo `%`, exponentiation
+  `**`, and compound floor-division assignment (`//=`).
+- Collection helpers demonstrated by examples include `len`, `range`, `sum`,
+  `min`, `max`, `sorted`, `randint`, list `append`, indexing, and dictionary
+  `items()` iteration.
+- Exception handling: `try`, `except`, optional exception binding, multiple
+  exception types, `else`, `finally`, `raise`, bare `raise`, and custom
+  exception classes derived from `Exception`.
+- Pointer operations: address-of, dereference, pointer arithmetic, pointer
+  chains, heap allocation through `mem.alloc[T]`, and release through
+  `mem.free`.
+- Pointer element iteration: range-for over pointer-valued collections retains
+  the pointer element type, allowing member access to generate pointer access
+  (`->`) instead of value access (`.`).
+
+### Example projects
+
+| Folder | What it demonstrates |
+| --- | --- |
+| `simple` | Basic output, imports, input, arithmetic, built-ins, collections, conditionals, membership tests, literals, and exceptions. |
+| `oop` | Classes, constructors, methods, and object-oriented code. |
+| `nesting` | Nested control flow and imports across modules. |
+| `low_level` | Allocation, references, pointer arithmetic, pointer chains, `defer`, `match`, and assertions. |
+| `raylib` | Window drawing, particles, Snake, Dodge, and a multi-file Space Defender project. |
+
+### Running the examples
+
+From the repository root in PowerShell:
+
+```powershell
+.\run_all.ps1
+# Skip Raylib graphical examples:
+.\run_all.ps1 -NoGui
+# Save verbose compiler output for each run:
+.\run_all.ps1 -Verbose
+```
+
+Raylib examples require Raylib and the linker flags configured in the runner.
+
 # **16. Future Development**
 
 Potential future features include:

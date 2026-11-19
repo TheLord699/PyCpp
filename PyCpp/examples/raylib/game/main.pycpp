@@ -17,7 +17,7 @@ def main() -> int:
     spawn_timer: float = 0.0
     game_over: bool = false
 
-    while WindowShouldClose() == false:
+    while !WindowShouldClose():
         # Calculate delta time in seconds
         delta: float = GetFrameTime()
 

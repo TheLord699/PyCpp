@@ -24,6 +24,12 @@ def main() -> int:
     print(hex(255))
     print(oct(8))
 
+    print("--- Try/except ---")
+    try:
+        x: int = 10 / 0
+    except:
+        print("except worked!")
+
     print("--- Builtins ---")
     print(sum(range(5)))
     print(min(nums))

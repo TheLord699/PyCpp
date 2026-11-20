@@ -4,6 +4,9 @@
 #include <fstream>
 #include <iostream>
 #include <system_error>
+#include <sstream>
+#include <iterator>
+#include "diagnostics.h"
 
 namespace {
 std::string trim(const std::string& value) {
@@ -39,6 +42,40 @@ std::string modulePath(std::string name) {
 }
 }
 
+// [diag-fix] a missing module is an error shown on the import line that asked for it
+static std::vector<pycpp::Diagnostic>& missingModules() {
+    static std::vector<pycpp::Diagnostic> list;
+    return list;
+}
+
+static void reportMissingModule(const std::string& file, const std::string& module) {
+    pycpp::Diagnostic d;
+    d.message = "cannot find module '" + module + "'";
+    d.file = file;
+    std::ifstream in(file);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::istringstream stream(text);
+    for (std::string l; std::getline(stream, l);) {
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        d.snippet_lines.push_back(l);
+    }
+    std::string dotted = module;
+    std::replace(dotted.begin(), dotted.end(), '/', '.');
+    for (size_t i = 0; i < d.snippet_lines.size(); ++i) {
+        const std::string stmt = trim(withoutComment(d.snippet_lines[i]));
+        if (stmt.rfind("import ", 0) != 0 && stmt.rfind("from ", 0) != 0) continue;
+        const size_t p = d.snippet_lines[i].find(dotted);
+        if (p == std::string::npos) continue;
+        d.line = static_cast<int>(i) + 1;
+        d.column = static_cast<int>(p) + 1;
+        d.length = static_cast<int>(dotted.size());
+        break;
+    }
+    d.label = "no such module";
+    d.hint = "looked for '" + module + ".pycpp' next to the importing file and in the import paths; add a folder with -I <path>";
+    missingModules().push_back(std::move(d));
+}
+
 ImportResolver::ImportResolver() {
     search_paths.emplace_back(".");
     search_paths.emplace_back("./lib");
@@ -57,7 +94,13 @@ void ImportResolver::addSearchPath(const std::string& path) {
 std::vector<std::string> ImportResolver::resolveAllDependencies(const std::string& entry_file) {
     std::vector<std::string> all_files;
     processed_files.clear();
+    missingModules().clear();
     resolveDependenciesRecursive(entry_file, all_files);
+    if (!missingModules().empty()) {
+        auto problems = std::move(missingModules());
+        missingModules().clear();
+        throw pycpp::CompileError(std::move(problems));
+    }
     return all_files;
 }
 
@@ -72,8 +115,7 @@ void ImportResolver::resolveDependenciesRecursive(const std::string& filename,
     for (const auto& module_name : extractImports(key)) {
         const std::string module_file = findModuleFile(module_name, key);
         if (module_file.empty()) {
-            std::cerr << "warning: cannot find module '" << module_name
-                      << "' (searched relative to the importing file and configured import paths)\n";
+            reportMissingModule(key, module_name);
             continue;
         }
         resolveDependenciesRecursive(module_file, result);

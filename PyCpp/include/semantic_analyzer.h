@@ -2,6 +2,7 @@
 #define SEMANTIC_ANALYZER_H
 
 #include "../include/ast.h"
+#include "diagnostics.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -57,7 +58,7 @@ private:
     // Scope management
     void enterScope();
     void exitScope();
-    void addSymbol(const std::string& name, const std::string& type, bool initialized = false);
+    void addSymbol(const std::string& name, const std::string& type, bool initialized = false, int line = 0, int column = 0);
     Symbol* findSymbol(const std::string& name);
     bool symbolExistsInCurrentScope(const std::string& name);
 
@@ -71,6 +72,8 @@ private:
     // Analysis methods
     void analyzeProgram(Program* program);
     void analyzeStatement(Stmt* stmt);
+    void analyzeGuarded(Stmt* stmt);                  // [diag-fix] records an error and keeps going
+    std::vector<pycpp::Diagnostic> collected;
     void analyzeVarDecl(VarDecl* var);
     void analyzeFunction(FunctionDef* func);
     void analyzeClass(ClassDef* cls);
@@ -98,8 +101,8 @@ private:
     void trackBuiltinUsage(const std::string& builtin);
 
     // Error reporting
-    void error(const std::string& message, int line, int column, const std::string& hint = "");
-    void warning(const std::string& message, int line, int column, const std::string& hint = "");
+    void error(const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
+    void warning(const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
 
 public:
     SemanticAnalyzer();

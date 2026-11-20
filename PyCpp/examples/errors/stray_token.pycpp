@@ -1,0 +1,3 @@
+def main() -> int:
+    print("hi")dads
+    return 0

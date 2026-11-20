@@ -1,0 +1,7 @@
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+
+def main() -> int:
+    hero: Playr = Player("Keith")
+    return 0

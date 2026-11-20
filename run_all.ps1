@@ -51,13 +51,20 @@ Run "13. pointer chain"  "low_level"    "pointer_chain.pycpp"
 Run "14. exceptions"     "simple"       "exceptions.pycpp"
 Run "15. imports"        "imports"      "main.pycpp"
 Run "16. module namespace regression" "module_regression" "main.pycpp"
+# [diag-fix] negative tests: each must be rejected with a diagnostic (exit code 1)
+Run "17. error: stray token"        "errors" "stray_token.pycpp"        @() 1
+Run "18. error: unknown name"       "errors" "unknown_name.pycpp"       @() 1
+Run "19. error: unknown type"       "errors" "unknown_type.pycpp"       @() 1
+Run "20. error: missing colon"      "errors" "missing_colon.pycpp"      @() 1
+Run "21. error: unterminated string" "errors" "unterminated_string.pycpp" @() 1
+Run "22. error: missing module"     "errors" "missing_module.pycpp"     @() 1
 
 if (-not $NoGui) {
-    Run "17. raylib window"    "raylib"       "window.pycpp"    $gui
-    Run "18. raylib dodge"     "raylib\dodge" "main.pycpp"      $gui
-    Run "19. raylib game"      "raylib\game"  "main.pycpp"      $gui
-    Run "20. raylib particles" "raylib"       "particles.pycpp" $gui
-    Run "21. raylib snake"     "raylib"       "snake.pycpp"     $gui
+    Run "23. raylib window"    "raylib"       "window.pycpp"    $gui
+    Run "24. raylib dodge"     "raylib\dodge" "main.pycpp"      $gui
+    Run "25. raylib game"      "raylib\game"  "main.pycpp"      $gui
+    Run "26. raylib particles" "raylib"       "particles.pycpp" $gui
+    Run "27. raylib snake"     "raylib"       "snake.pycpp"     $gui
 }
 
 Write-Host ""

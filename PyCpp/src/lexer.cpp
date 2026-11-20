@@ -90,7 +90,7 @@ Token Lexer::readString() {
     char quote = advance(); // Skip opening quote
     std::string str;
 
-    while (peek() != quote && peek() != '\0') {
+    while (peek() != quote && peek() != '\0' && peek() != '\n') {   // [diag-fix] strings end at the line end
         if (peek() == '\\') {
             advance(); // Skip backslash
             // Handle escape sequences
@@ -112,6 +112,9 @@ Token Lexer::readString() {
 
     if (peek() == quote) {
         advance(); // Skip closing quote
+    }
+    else {
+        return Token(TokenType::UNKNOWN, "unterminated string literal", start_line, start_column);
     }
 
     return Token(TokenType::STRING_LITERAL, str, start_line, start_column);
@@ -596,7 +599,7 @@ std::vector<Token> Lexer::tokenize() {
 
                 if (indent_stack.back() != current_indent) {
                     // Indentation error - mismatched levels
-                    tokens.emplace_back(TokenType::UNKNOWN, "Indentation error", line, column);
+                    tokens.emplace_back(TokenType::UNKNOWN, "inconsistent indentation: this line does not line up with any enclosing block", line, column);
                 }
             }
 

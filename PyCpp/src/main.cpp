@@ -65,17 +65,26 @@ public:
         std::cout << message << std::endl;
     }
 
-    static void printNote(const std::string& message) {
-        std::cerr << "note: " << message << std::endl;
+    // [diag-fix] every message goes through the Rust-style renderer
+    static void emitPlain(pycpp::Severity severity, const std::string& message, const std::string& hint) {
+        pycpp::Diagnostic d;
+        d.severity = severity;
+        d.message = message;
+        d.hint = hint;
+        pycpp::emit(d);
+    }
+
+    static void printNote(const std::string& message, const std::string& hint = "") {
+        emitPlain(pycpp::Severity::Note, message, hint);
     }
 
     // Warnings and errors are always shown, on stderr.
-    static void printWarning(const std::string& message) {
-        std::cerr << "warning: " << message << std::endl;
+    static void printWarning(const std::string& message, const std::string& hint = "") {
+        emitPlain(pycpp::Severity::Warning, message, hint);
     }
 
-    static void printError(const std::string& message) {
-        std::cerr << "error: " << message << std::endl;
+    static void printError(const std::string& message, const std::string& hint = "") {
+        emitPlain(pycpp::Severity::Error, message, hint);
     }
 
     static void printProgramOutput(const std::string& output) {
@@ -106,13 +115,21 @@ public:
 
 // Render a failure: structured errors get a code frame, everything else a plain line.
 static void reportFailure(const std::exception& e) {
+    // [diag-fix]
     if (auto ce = dynamic_cast<const pycpp::CompileError*>(&e)) {
-        for (const auto& d : ce->diagnostics) pycpp::emit(d);
-        const size_t n = ce->diagnostics.size();
-        std::cerr << "error: could not compile due to " << n << (n == 1 ? " error" : " errors") << "\n";
+        size_t errors = 0;
+        for (const auto& d : ce->diagnostics) {
+            pycpp::emit(d);
+            if (d.severity == pycpp::Severity::Error) ++errors;
+        }
+        std::cerr << pycpp::failureSummary(errors == 0 ? 1 : errors) << "\n";
     }
     else {
-        std::cerr << "error: " << e.what() << "\n";
+        pycpp::Diagnostic d;
+        d.message = e.what();
+        if (d.message.rfind("cannot open", 0) == 0) d.hint = "check the path, and the directory you are running pycpp from";
+        pycpp::emit(d);
+        std::cerr << pycpp::failureSummary(1) << "\n";
     }
 }
 
@@ -374,9 +391,25 @@ void printUsage(const std::string& programName) {
 // Turn raw C++ compiler output into one short PyCPP diagnostic. The C++ output itself
 // is only shown with --verbose.
 static void explainBuildFailure(const std::vector<std::string>& log, const std::string& tempDir) {
+    // [diag-fix] turn the raw C++ compiler output into one short PyCPP diagnostic
     pycpp::Diagnostic d;
+    std::string first_error;
+    auto shorten = [](std::string line) {
+        size_t cut = line.find(".cpp:");
+        const size_t h = line.find(".h:");
+        if (h < cut) cut = h;
+        if (cut != std::string::npos) {
+            const size_t slash = line.find_last_of("/\\", cut);
+            if (slash != std::string::npos) line.erase(0, slash + 1);
+        }
+        return line;
+    };
     for (const auto& line : log) {
         size_t p;
+        if (first_error.empty() && (line.find(": error:") != std::string::npos ||
+            line.find(": fatal error:") != std::string::npos || line.find(" error C") != std::string::npos))
+            first_error = shorten(line);
+
         if ((p = line.find("undefined reference to `")) != std::string::npos) {
             size_t s = p + 24, e = line.find('\'', s);
             d.message = "linking failed: cannot find '" + line.substr(s, e == std::string::npos ? std::string::npos : e - s) + "'";
@@ -405,6 +438,7 @@ static void explainBuildFailure(const std::vector<std::string>& log, const std::
         d.message = "the generated C++ failed to compile";
         d.hint = "this is a PyCPP bug or an unsupported construct. Re-run with --verbose to see the "
                  "C++ compiler output, or --keep-temp to inspect " + tempDir;
+        if (!first_error.empty()) d.notes.push_back("the C++ compiler reported:\n" + first_error);
     }
     pycpp::emit(d);
 }
@@ -419,7 +453,11 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
     const std::string& linkerFlags, bool buildOnly = false) {
     std::string reason;
     if (!CompilerBackend::isAvailable(compiler, reason)) {
-        TerminalFormatter::printError(reason);
+        {
+        const size_t cut = reason.find(". ");
+        if (cut == std::string::npos) TerminalFormatter::printError(reason);
+        else TerminalFormatter::printError(reason.substr(0, cut), reason.substr(cut + 2));
+    }
         return false;
     }
 
@@ -444,7 +482,7 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
 
     if (!built) {
         if (!verbose) explainBuildFailure(log, includeDir);   // never dump raw C++ errors
-        TerminalFormatter::printError("Compilation failed");
+        if (verbose) TerminalFormatter::printError("compilation failed");   // explainBuildFailure already reported it
         return false;
     }
 
@@ -590,7 +628,7 @@ bool compileSingleFile(const std::string& inputFile, const std::string& outputBa
 
         std::ifstream file(inputFile);
         if (!file.is_open()) {
-            TerminalFormatter::printError("Cannot open input file '" + inputFile + "'");
+            TerminalFormatter::printError("cannot open input file '" + inputFile + "'", "check the path, and the directory you are running pycpp from");
             return false;
         }
 
@@ -670,7 +708,7 @@ bool compileFile(const std::string& inputFile, const std::string& outputBase, bo
         try {
             std::ifstream file(inputFile);
             if (!file.is_open()) {
-                TerminalFormatter::printError("Cannot open input file '" + inputFile + "'");
+                TerminalFormatter::printError("cannot open input file '" + inputFile + "'", "check the path, and the directory you are running pycpp from");
                 return false;
             }
 
@@ -768,7 +806,7 @@ int main(int argc, char* argv[]) {
                 value = arg.substr(std::string("--compiler=").size());
             }
             if (!CompilerBackend::parseKind(value, requestedCompiler)) {
-                TerminalFormatter::printError("Unknown compiler '" + value + "' (expected gcc, msvc or auto)");
+                TerminalFormatter::printError("unknown compiler '" + value + "'", "expected one of: gcc, msvc, auto");
                 return 1;
             }
         }
@@ -796,7 +834,14 @@ int main(int argc, char* argv[]) {
             }
         }
         else if (arg[0] == '-') {
-            TerminalFormatter::printError("Unknown option '" + arg + "'");
+            {
+                static const std::vector<std::string> known_options = { "-h", "--help", "-v", "--verbose", "--keep-temp",
+                    "-b", "--build", "--no-compile", "--single-file", "--compiler", "--linker-flags", "-I", "-o" };
+                const std::string guess = pycpp::closestMatch(arg, known_options);
+                TerminalFormatter::printError("unknown option '" + arg + "'",
+                    guess.empty() ? std::string("run `pycpp --help` to list the available options")
+                                  : "did you mean '" + guess + "'?");
+            }
             printUsage(argv[0]);
             return 1;
         }
@@ -804,13 +849,13 @@ int main(int argc, char* argv[]) {
     }
 
     if (inputFile.empty()) {
-        TerminalFormatter::printError("No input file specified");
+        TerminalFormatter::printError("no input file specified", "usage: pycpp <file.pycpp> [options]");
         printUsage(argv[0]);
         return 1;
     }
 
     if (inputFile.length() < 7 || inputFile.substr(inputFile.length() - 6) != ".pycpp") {
-        TerminalFormatter::printWarning("Input file '" + inputFile + "' doesn't have .pycpp extension");
+        TerminalFormatter::printWarning("input file '" + inputFile + "' doesn't have the .pycpp extension", "PyCPP source files are named <name>.pycpp");
     }
 
     if (outputBase.empty()) {

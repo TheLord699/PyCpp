@@ -1,0 +1,4 @@
+import does_not_exist
+
+def main() -> int:
+    return 0

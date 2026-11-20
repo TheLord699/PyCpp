@@ -1,0 +1,4 @@
+def main() -> int:
+    score: int = 10
+    print(scor)
+    return 0

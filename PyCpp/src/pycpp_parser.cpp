@@ -49,19 +49,79 @@ static bool isWordToken(const Token& token) {
         (std::isalpha(static_cast<unsigned char>(token.value[0])) || token.value[0] == '_');
 }
 
+// [diag-fix] help text for the most common syntax errors
+static std::string syntaxHint(const std::string& m) {
+    auto has = [&](const char* s) { return m.find(s) != std::string::npos; };
+    if (has("after the end of the statement"))
+        return "put each statement on its own line (PyCPP has no ';' separator)";
+    if (has("expected ':'"))
+        return "block headers such as `def`, `if`, `for`, `while` and `class` must end with ':'";
+    if (has("indented block") || has("indented class body") || has("indented struct body") || has("indented 'case'"))
+        return "indent the body by 4 spaces";
+    if (has("unexpected indentation"))
+        return "this line is indented more than the block it belongs to; align it with the lines above";
+    if (has("inconsistent indentation"))
+        return "use the same number of spaces for every line of a block (a tab counts as 4 spaces)";
+    if (has("unterminated string"))
+        return "add the closing quote before the end of the line";
+    if (has("expected ')'"))
+        return "a '(' is probably not closed";
+    if (has("expected ']'"))
+        return "a '[' is probably not closed";
+    if (has("expected '}'"))
+        return "a '{' is probably not closed";
+    if (has("expression"))
+        return "a value, name or call is needed here";
+    if (has("type specification"))
+        return "write a type such as int, float, str, bool, list[int], *Node or a class name";
+    if (has("function name") || has("class name") || has("struct name"))
+        return "a name must follow the keyword";
+    if (has("out of range"))
+        return "use a smaller literal, or a float";
+    if (has("unexpected character"))
+        return "this character is not part of PyCPP syntax";
+    return "";
+}
+
 void PyCppParser::reportError(const std::string& message, int line, int column) {
-    errors.push_back("line " + std::to_string(line) + ":" + std::to_string(column) + ": syntax error: " + message);
+    // [diag-fix] structured, Rust-style syntax diagnostics
+    pycpp::Diagnostic d;
+    std::string text = message;
+    const size_t at = text.find(" at line ");
+    if (at != std::string::npos) text.erase(at);               // the frame shows the location
+    const size_t eof = text.find(" (reached end of file)");
+    if (eof != std::string::npos) { text.erase(eof); d.label = "the file ends here"; }
+    if (text.size() > 1 && std::isupper(static_cast<unsigned char>(text[0])) &&
+        std::islower(static_cast<unsigned char>(text[1])))
+        text[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(text[0])));
+
+    const auto& src_lines = pycpp::source().lines;
+    if (line <= 0 && !tokens.empty()) { line = tokens.back().line; column = tokens.back().column; }
+    if (!src_lines.empty() && line > static_cast<int>(src_lines.size())) {
+        line = static_cast<int>(src_lines.size());
+        column = static_cast<int>(src_lines.back().size()) + 1;
+    }
+    for (const auto& t : tokens) {                               // underline the whole token
+        if (t.line != line || t.column != column || t.value.empty() || t.type == TokenType::NEWLINE) continue;
+        if (t.type != TokenType::UNKNOWN)
+            d.length = static_cast<int>(t.value.size()) + (t.type == TokenType::STRING_LITERAL ? 2 : 0);
+        break;
+    }
+    if (text.find("after the end of the statement") != std::string::npos)
+        d.label = "expected a new line before this";
+    d.message = text;
+    d.line = line;
+    d.column = column;
+    d.hint = syntaxHint(text);
+    for (const auto& e : errors)
+        if (e.line == d.line && e.column == d.column && e.message == d.message) return;
+    errors.push_back(std::move(d));
 }
 
 std::unique_ptr<Program> PyCppParser::parse() {
     auto program = parseProgram();
     if (!errors.empty()) {
-        std::string all;
-        for (size_t i = 0; i < errors.size(); ++i) {
-            if (i > 0) all += "\n   ";
-            all += errors[i];
-        }
-        throw std::runtime_error(all);
+        throw pycpp::CompileError(errors);
     }
     return program;
 }
@@ -410,6 +470,7 @@ std::unique_ptr<Program> PyCppParser::parseProgram() {
             reportError(e.what(), peek().line, peek().column);
             pending_statements.clear();
             synchronize();
+            if (check(TokenType::INDENT)) skipIndentedRegion();   // skip the body of the broken header
             // Don't break, try to continue parsing
         }
     }
@@ -479,6 +540,15 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
     }
     return stmt;
 }
+// [diag-fix] A statement must end at a newline (or at the end of its block).
+void PyCppParser::expectStatementEnd() {
+    if (match(TokenType::NEWLINE)) return;
+    if (atEnd() || check(TokenType::DEDENT)) return;
+    const Token t = peek();
+    if (t.type == TokenType::UNKNOWN && t.value.size() > 1) throw std::runtime_error(t.value);
+    throw std::runtime_error("unexpected '" + t.value + "' after the end of the statement");
+}
+
 std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     // Handle unsafe blocks in statement context
     if (check(TokenType::UNSAFE)) {
@@ -558,8 +628,7 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
         stmt->line = tokens[position].line;
         stmt->column = tokens[position].column;
 
-        // Try to consume newline, but don't require it
-        match(TokenType::NEWLINE);
+        expectStatementEnd();
         return stmt;
     }
 
@@ -920,8 +989,7 @@ std::unique_ptr<VarDecl> PyCppParser::parseClassAttribute() {
         var_decl->value = parseExpression();
     }
 
-    // Consume newline if present
-    match(TokenType::NEWLINE);
+    expectStatementEnd();
 
     pycpp::debugLog() << "Successfully parsed class attribute: " << var_decl->var_name << std::endl;
     return var_decl;
@@ -1110,8 +1178,7 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
         var_decl->value = parseExpression();
     }
 
-    // Consume newline if present
-    match(TokenType::NEWLINE);
+    expectStatementEnd();
 
     pycpp::debugLog() << "Successfully parsed variable declaration: " << var_decl->var_name << std::endl;
     return var_decl;
@@ -1396,8 +1463,7 @@ std::unique_ptr<ReturnStmt> PyCppParser::parseReturnStmt() {
         return_stmt->value = parseExpression();
     }
 
-    // Consume newline if present
-    match(TokenType::NEWLINE);
+    expectStatementEnd();
 
     return return_stmt;
 }
@@ -2213,6 +2279,12 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 result = nullptr; // Let the caller handle this as a declaration
             }
             else {
+                if (peek().type == TokenType::UNKNOWN && peek().value.size() > 1)
+                    throw std::runtime_error(peek().value);   // message produced by the lexer
+                if (peek().type == TokenType::UNKNOWN)
+                    throw std::runtime_error("unexpected character '" + peek().value + "'");
+                if (peek().type == TokenType::NEWLINE || peek().type == TokenType::DEDENT)
+                    throw std::runtime_error("expected an expression, but the line ended");
                 throw std::runtime_error("Expected expression, got: '" + peek().value + "'");
             }
         }

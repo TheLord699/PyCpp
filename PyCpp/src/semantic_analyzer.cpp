@@ -97,6 +97,13 @@ SemanticAnalyzer::SemanticAnalyzer()
     addSymbol("true", "bool");
     addSymbol("false", "bool");
     addSymbol("nullptr", "void*");
+    // [diag-fix] builtins the lexer knows, so they are never reported as unknown names
+    for (const char* name : { "exit", "quit", "help", "dir", "vars", "locals", "globals", "id", "hash",
+                              "del", "gc", "malloc", "free", "open", "read", "write", "close", "seek", "tell",
+                              "format", "join", "split", "strip", "replace", "find", "startswith", "endswith",
+                              "lower", "upper", "capitalize", "title", "math", "random", "uniform" }) {
+        addSymbol(name, "function");
+    }
     for (const char* name : { "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
                               "LookupError", "IndexError", "KeyError", "ValueError", "TypeError",
                               "RuntimeError" }) {
@@ -137,9 +144,10 @@ void SemanticAnalyzer::exitScope() {
     }
 }
 
-void SemanticAnalyzer::addSymbol(const std::string& name, const std::string& type, bool initialized) {
+void SemanticAnalyzer::addSymbol(const std::string& name, const std::string& type, bool initialized, int line, int column) {
     if (symbolExistsInCurrentScope(name)) {
-        error("Symbol '" + name + "' already declared in current scope", 0, 0);
+        error("the name '" + name + "' is defined more than once in this scope", line, column,
+              "rename one of them, or remove the duplicate definition", static_cast<int>(name.size()));
         return;
     }
 
@@ -453,8 +461,10 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 for (auto& kv : functions) known.push_back(kv.first);
                 for (auto& kv : classes) known.push_back(kv.first);
                 std::string guess = pycpp::closestMatch(ident->name, known);
-                warning("cannot find '" + ident->name + "' in this scope", ident->line, ident->column,
-                    guess.empty() ? std::string() : "did you mean '" + guess + "'?");
+                error("cannot find '" + ident->name + "' in this scope", ident->line, ident->column,
+                    guess.empty() ? std::string("check the spelling, or declare it before it is used")
+                                  : "a similar name exists, did you mean '" + guess + "'?",
+                    static_cast<int>(ident->name.size()));
             }
             pycpp::debugLog() << "WARNING: Symbol '" << ident->name << "' not found, but continuing..." << std::endl;
         }
@@ -487,8 +497,17 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 if (class_sym.attributes.find(member_access->member) == class_sym.attributes.end() &&
                     class_sym.methods.find(member_access->member) == class_sym.methods.end() &&
                     current_class->base_class.empty()) {   // the base may live in another module
-                    warning("Unknown member '" + member_access->member + "' in class '" +
-                        current_class->name + "'", member_access->line, member_access->column);
+                    {
+                        std::vector<std::string> known;
+                        for (const auto& kv : class_sym.attributes) known.push_back(kv.first);
+                        for (const auto& kv : class_sym.methods) known.push_back(kv.first);
+                        const std::string guess = pycpp::closestMatch(member_access->member, known);
+                        warning("no member named '" + member_access->member + "' in class '" + current_class->name + "'",
+                            member_access->line, member_access->column,
+                            guess.empty() ? "declare it with `self." + member_access->member + ": <type> = ...` in __init__"
+                                          : "did you mean 'self." + guess + "'?",
+                            static_cast<int>(member_access->member.size()));
+                    }
                 }
                 else {
                     pycpp::debugLog() << "Found member access: self." << member_access->member <<
@@ -710,7 +729,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
             functions[func->name] = func_sym;
 
             // === FIX: Add function to global symbol table ===
-            addSymbol(func->name, "function", true);
+            addSymbol(func->name, "function", true, func->line, func->column + 4);
             pycpp::debugLog() << "Registered and added to symbol table function: " << func->name << " -> " << func_sym.return_type << std::endl;
         }
         else if (auto cls = dynamic_cast<ClassDef*>(stmt.get())) {
@@ -720,7 +739,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
             classes[cls->name] = cls_sym;
 
             // === FIX: Add class to global symbol table ===
-            addSymbol(cls->name, "class", true);
+            addSymbol(cls->name, "class", true, cls->line, cls->column + 6);
             pycpp::debugLog() << "Registered and added to symbol table class: " << cls->name << std::endl;
         }
         else if (auto struc = dynamic_cast<StructDef*>(stmt.get())) {
@@ -729,7 +748,7 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
             classes[struc->name] = cls_sym;
 
             // === FIX: Add struct to global symbol table ===
-            addSymbol(struc->name, "class", true);
+            addSymbol(struc->name, "class", true, struc->line, struc->column + 7);
             pycpp::debugLog() << "Registered and added to symbol table struct: " << struc->name << std::endl;
         }
         else if (auto import = dynamic_cast<ImportStmt*>(stmt.get())) {
@@ -741,13 +760,56 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
         }
     }
 
-    // Second pass: analyze statements
+    // Second pass: analyze statements (errors are collected)
     for (auto& stmt : program->statements) {
-        analyzeStatement(stmt.get());
+        analyzeGuarded(stmt.get());
+    }
+    if (!collected.empty()) {
+        std::vector<pycpp::Diagnostic> all = std::move(collected);
+        collected.clear();
+        throw pycpp::CompileError(std::move(all));
+    }
+}
+
+void SemanticAnalyzer::analyzeGuarded(Stmt* stmt) {
+    // [diag-fix] Record the error and continue, so one run reports as many problems as possible.
+    const size_t depth = scopes.size();
+    const int scope_level = current_scope;
+    FunctionSymbol* fn = current_function;
+    ClassSymbol* cls = current_class;
+    const int handlers = handler_depth;
+    try {
+        analyzeStatement(stmt);
+    }
+    catch (const pycpp::CompileError& e) {
+        for (const auto& d : e.diagnostics) collected.push_back(d);
+        while (scopes.size() > depth) scopes.pop_back();
+        current_scope = scope_level;
+        current_function = fn;
+        current_class = cls;
+        handler_depth = handlers;
+        // declare the variable anyway, so later uses do not produce a cascade of errors
+        if (auto v = dynamic_cast<VarDecl*>(stmt)) {
+            if (v->var_name.find("self.") != 0 && !symbolExistsInCurrentScope(v->var_name))
+                scopes.back()[v->var_name] = Symbol{ v->var_name, "auto", true, current_scope };
+        }
     }
 }
 
 void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
+    if (!current_function) {
+        const char* kind = nullptr;
+        if (dynamic_cast<ExprStmt*>(stmt)) kind = "expression statements";
+        else if (dynamic_cast<IfStmt*>(stmt)) kind = "'if' statements";
+        else if (dynamic_cast<WhileStmt*>(stmt)) kind = "'while' loops";
+        else if (dynamic_cast<ForStmt*>(stmt)) kind = "'for' loops";
+        if (kind) {
+            int ln = stmt->line, col = stmt->column;
+            if (auto es = dynamic_cast<ExprStmt*>(stmt); es && es->expr) { ln = es->expr->line; col = es->expr->column; }
+            error(std::string(kind) + " are only allowed inside a function", ln, col,
+                  "put this code inside `def main() -> int:`");
+        }
+    }
     if (auto expr_stmt = dynamic_cast<ExprStmt*>(stmt)) {
         analyzeExpression(expr_stmt->expr.get());
     }
@@ -815,8 +877,16 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
     std::string type_name = typeToString(var->type.get());
 
     if (!isValidType(type_name) && !has_cpp_headers) {
-        warning("unknown type '" + friendlyType(type_name) + "'", var->line, var->column,
-            "declare the class/struct first, or import it with 'from module import Name'");
+        {
+            std::vector<std::string> known;
+            for (const auto& kv : classes) known.push_back(kv.first);
+            const std::string guess = pycpp::closestMatch(type_name, known);
+            error("cannot find type '" + friendlyType(type_name) + "' in this scope",
+                var->type ? var->type->line : var->line, var->type ? var->type->column : var->column,
+                guess.empty() ? std::string("declare the class/struct first, or import it with `from module import Name`")
+                              : "a similar type exists, did you mean '" + guess + "'?",
+                static_cast<int>(friendlyType(type_name).size()));
+        }
     }
 
     // For member variables (self.xxx), we need to store them differently
@@ -856,8 +926,8 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
                 // Check if it's the same declaration (line/column match)
                 Symbol* existing = findSymbol(var->var_name);
                 if (existing && existing->scope_level == current_scope) {
-                    error("Symbol '" + var->var_name + "' already declared in current scope",
-                        var->line, var->column);
+                    error("the name '" + var->var_name + "' is defined more than once in this scope", var->line, var->column,
+                        "rename one of them, or remove the duplicate declaration", static_cast<int>(var->var_name.size()));
                     return;
                 }
             }
@@ -966,14 +1036,14 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
     // Add parameters to scope
     for (const auto& param : func->parameters) {
         std::string param_type = typeToString(param.type.get());
-        addSymbol(param.name, param_type, true);
+        addSymbol(param.name, param_type, true, func->line, func->column);
         pycpp::debugLog() << "Added parameter to function scope: " << param.name << " : " << param_type << std::endl;
     }
 
     // FIXED: Single pass for analyzing function body
     // Don't pre-collect variable declarations separately
     for (auto& stmt : func->body) {
-        analyzeStatement(stmt.get());
+        analyzeGuarded(stmt.get());
     }
 
     // Check return type - don't warn for constructors
@@ -981,7 +1051,9 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
     if (declared_return != "void" && declared_return != "None" && declared_return != "auto" &&
         !current_function->has_return &&
         func->name != "__init__") {  // Don't warn for constructors
-        warning("Function '" + func->name + "' may not return a value", func->line, func->column);
+        warning("function '" + func->name + "' is declared to return " + friendlyType(declared_return) +
+                " but contains no 'return'", func->line, func->column,
+                "add `return <value>`, or change the return type to `void`", 3);
     }
 
     exitScope(); // Exit function scope
@@ -1171,16 +1243,16 @@ static std::string location(int line, int column) {
     return text + ": ";
 }
 
-void SemanticAnalyzer::error(const std::string& message, int line, int column, const std::string& hint) {
+void SemanticAnalyzer::error(const std::string& message, int line, int column, const std::string& hint, int length) {
     pycpp::Diagnostic d;
-    d.message = message; d.line = line; d.column = column; d.hint = hint;
+    d.message = message; d.line = line; d.column = column; d.hint = hint; d.length = length;
     throw pycpp::CompileError(d);   // rendered once, by the caller
 }
 
-void SemanticAnalyzer::warning(const std::string& message, int line, int column, const std::string& hint) {
+void SemanticAnalyzer::warning(const std::string& message, int line, int column, const std::string& hint, int length) {
     pycpp::Diagnostic d;
     d.severity = pycpp::Severity::Warning;
-    d.message = message; d.line = line; d.column = column; d.hint = hint;
+    d.message = message; d.line = line; d.column = column; d.hint = hint; d.length = length;
     pycpp::emit(d);
 }
 

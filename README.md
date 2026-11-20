@@ -741,22 +741,7 @@ From the repository root in PowerShell:
 
 Raylib examples require Raylib and the linker flags configured in the runner.
 
-# **16. Future Development**
-
-Potential future features include:
-
-- List comprehensions.
-- Slicing.
-- Exception chaining (`raise ... from ...`).
-- Function overloading.
-- Type inference.
-- Ownership and move semantics.
-- RAII wrappers.
-- Advanced compile-time metaprogramming.
-- Improved C++ interoperability.
-- Expanded standard library.
-
-# **17. Design Philosophy**
+# **16. Design Philosophy**
 
 PyCPP follows five core principles:
 

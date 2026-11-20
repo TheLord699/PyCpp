@@ -761,4 +761,4 @@ Write less boilerplate. Keep complete control. Get native performance.
 
 **The simplicity of Python. The power of C++.**
 
-*Note: PyCPP is an AI-designed language project. Features described as supported represent the proposed language specification; future enhancements are planned rather than necessarily implemented.*
+*Note: PyCPP is an AI-designed language project.

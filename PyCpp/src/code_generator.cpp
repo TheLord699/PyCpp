@@ -303,7 +303,7 @@ public:
 
     void visit(ImportStmt& node) override {
         // Track imported modules for header generation
-        include_manager.trackManualInclude("\"" + node.module + ".h\"");
+        include_manager.trackManualInclude("\"" + node.leaf() + ".h\"");
     }
 
     void visit(UseStmt& node) override {}
@@ -350,6 +350,23 @@ static bool isBuiltinExceptionName(const std::string& name) {
         "LookupError", "IndexError", "KeyError", "ValueError", "TypeError", "RuntimeError"
     };
     return names.count(name) > 0;
+}
+
+// graphics.shapes (MemberAccess chain) -> "graphics.shapes"; "" if it is not a pure name chain
+static std::string dottedName(Expr* e) {
+    if (auto id = dynamic_cast<Identifier*>(e)) return id->name;
+    if (auto m = dynamic_cast<MemberAccess*>(e)) {
+        std::string base = dottedName(m->object.get());
+        return base.empty() ? std::string() : base + "." + m->member;
+    }
+    return "";
+}
+
+// True for `graphics`, `graphics.shapes` or an `as` alias, unless a local variable shadows it.
+bool CodeGenerator::isModuleExpr(Expr* expr) {
+    const std::string name = dottedName(expr);
+    if (name.empty() || name == "self" || name == "this" || !imported_modules.count(name)) return false;
+    return lookupVar(name.substr(0, name.find('.'))) == nullptr;
 }
 
 CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
@@ -600,8 +617,21 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
             include_manager.trackManualInclude("<" + use_stmt->library + ">");
         }
         if (auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get())) {
-            import_includes.push_back("\"" + import_stmt->module + ".h\"");
-            imported_modules.insert(import_stmt->module);
+            import_includes.push_back("\"" + import_stmt->leaf() + ".h\"");   // graphics.shapes -> "shapes.h"
+            if (!import_stmt->is_from) {
+                if (!import_stmt->alias.empty()) {
+                    imported_modules.insert(import_stmt->alias);
+                }
+                else {
+                    // import a.b.c makes a, a.b and a.b.c valid module references
+                    std::string prefix;
+                    std::istringstream parts(import_stmt->module);
+                    for (std::string seg; std::getline(parts, seg, '.');) {
+                        prefix += (prefix.empty() ? "" : ".") + seg;
+                        imported_modules.insert(prefix);
+                    }
+                }
+            }
         }
     }
 
@@ -730,6 +760,7 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
 
     // Headers of imported PyCPP modules
     for (const auto& include : import_includes) {
+        if (include_manager.isHeaderIncluded(include)) continue;  // already emitted above
         output << "#include " << include << "\n";
     }
 
@@ -1318,16 +1349,14 @@ void CodeGenerator::generateExpression(Expr* expr) {
 
         // module.function(args): module functions are plain functions in C++
         if (auto module_member = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
-            if (auto module_ident = dynamic_cast<Identifier*>(module_member->object.get())) {
-                if (imported_modules.count(module_ident->name) > 0 && !lookupVar(module_ident->name)) {
-                    output << module_member->member << "(";
-                    for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
-                        if (i > 0) output << ", ";
-                        generateExpression(call_expr->arguments[i].get());
-                    }
-                    output << ")";
-                    return;
+            if (isModuleExpr(module_member->object.get())) {
+                output << module_member->member << "(";
+                for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                    if (i > 0) output << ", ";
+                    generateExpression(call_expr->arguments[i].get());
                 }
+                output << ")";
+                return;
             }
         }
 
@@ -2209,19 +2238,11 @@ void CodeGenerator::generateExpression(Expr* expr) {
     }
     // Enhanced member access handling for both objects and modules
     else if (auto member_access = dynamic_cast<MemberAccess*>(expr)) {
-        // Check if this is module access (like greetings.hello)
-        if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
-            // Only identifiers that name an imported module are module accesses;
-            // anything else (e.g. a local variable 'player') is an object access
-            if (ident->name != "self" && ident->name != "this" &&
-                imported_modules.count(ident->name) > 0 &&
-                lookupVar(ident->name) == nullptr) {
-                // This is likely a module access like greetings.hello
-                // For now, generate as direct function call since we include the header
-                // In a more advanced implementation, we might use namespaces
-                output << member_access->member;
-                return; // Early return to avoid the dot operator
-            }
+        // Module access (greetings.hello, graphics.shapes.PI, alias.fn): the generated
+        // headers declare plain functions, so only the member name is emitted.
+        if (isModuleExpr(member_access->object.get())) {
+            output << member_access->member;
+            return;
         }
 
         // Original handling for object member access

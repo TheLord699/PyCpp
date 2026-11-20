@@ -393,6 +393,11 @@ std::unique_ptr<Program> PyCppParser::parseProgram() {
 
             if (auto stmt = parseTopLevelStatement()) {
                 program->statements.push_back(std::move(stmt));
+                for (auto& extra : pending_statements) {      // import a, b
+                    program->statements.push_back(std::move(extra));
+                    statement_count++;
+                }
+                pending_statements.clear();
                 pycpp::debugLog() << "Successfully parsed statement " << statement_count << std::endl;
                 statement_count++;
             }
@@ -403,6 +408,7 @@ std::unique_ptr<Program> PyCppParser::parseProgram() {
         }
         catch (const std::runtime_error& e) {
             reportError(e.what(), peek().line, peek().column);
+            pending_statements.clear();
             synchronize();
             // Don't break, try to continue parsing
         }
@@ -1422,14 +1428,29 @@ std::unique_ptr<ContinueStmt> PyCppParser::parseContinueStmt() {
 
 // ===== Import and Use Statements =====
 
-// from module import name1, name2
+// graphics.shapes -> "graphics.shapes" (any word is allowed, even keyword-lexed ones like `random`)
+std::string PyCppParser::parseModulePath() {
+    if (atEnd() || !isWordToken(peek()))
+        throw std::runtime_error("Expected module name at line " +
+            std::to_string(peek().line) + ":" + std::to_string(peek().column));
+    std::string path = advance().value;
+    while (check(TokenType::DOT)) {
+        advance();
+        if (atEnd() || !isWordToken(peek()))
+            throw std::runtime_error("Expected a name after '.' in module path");
+        path += "." + advance().value;
+    }
+    return path;
+}
+
+// from a.b import name1, name2
 std::unique_ptr<ImportStmt> PyCppParser::parseFromImportStmt() {
     auto import_stmt = std::make_unique<ImportStmt>();
     import_stmt->line = tokens[position - 1].line;
     import_stmt->column = tokens[position - 1].column;
     import_stmt->is_from = true;
 
-    import_stmt->module = consume(TokenType::IDENTIFIER, "Expected module name after 'from'").value;
+    import_stmt->module = parseModulePath();
     consume(TokenType::IMPORT, "Expected 'import' after module name");
 
     do {
@@ -1440,39 +1461,30 @@ std::unique_ptr<ImportStmt> PyCppParser::parseFromImportStmt() {
     return import_stmt;
 }
 
+// import a.b [as x] [, c [as y] ...]
+// The first module is returned; the rest are queued in pending_statements and
+// appended to the program by parseProgram().
 std::unique_ptr<ImportStmt> PyCppParser::parseImportStmt() {
-    auto import_stmt = std::make_unique<ImportStmt>();
-    import_stmt->line = tokens[position - 1].line;
-    import_stmt->column = tokens[position - 1].column;
+    const int line = tokens[position - 1].line;
+    const int column = tokens[position - 1].column;
 
-    // Check for "from ... import ..." syntax
-    if (check(TokenType::IDENTIFIER) && peek().value == "from") {
-        advance(); // consume "from"
-        import_stmt->module = consume(TokenType::IDENTIFIER, "Expected module name after 'from'").value;
-        consume(TokenType::IMPORT, "Expected 'import' after module name");
-
-        // Parse imported names
-        do {
-            import_stmt->imports.push_back(consume(TokenType::IDENTIFIER, "Expected identifier after 'import'").value);
-        } while (match(TokenType::COMMA));
-    }
-    else {
-        // Simple "import ..." syntax
-        import_stmt->module = consume(TokenType::IDENTIFIER, "Expected module name").value;
-
-        // Check for import with specific items: import module.item
-        if (match(TokenType::DOT)) {
-            if (check(TokenType::IDENTIFIER)) {
-                import_stmt->imports.push_back(advance().value);
-            }
+    std::unique_ptr<ImportStmt> first;
+    do {
+        auto stmt = std::make_unique<ImportStmt>();
+        stmt->line = line;
+        stmt->column = column;
+        stmt->module = parseModulePath();
+        if (match(TokenType::AS)) {
+            stmt->alias = consume(TokenType::IDENTIFIER, "Expected alias name after 'as'").value;
         }
-    }
+        if (!first) first = std::move(stmt);
+        else pending_statements.push_back(std::move(stmt));
+    } while (match(TokenType::COMMA));
 
-    // Consume newline
     match(TokenType::NEWLINE);
-
-    return import_stmt;
+    return first;
 }
+
 std::unique_ptr<UseStmt> PyCppParser::parseUseStmt() {
     auto use_stmt = std::make_unique<UseStmt>();
     use_stmt->line = tokens[position - 1].line;

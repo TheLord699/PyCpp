@@ -645,22 +645,34 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
 }
 
 // ===== IMPORT HANDLING =====
-void SemanticAnalyzer::analyzeImportStmt(ImportStmt* import) {
-    pycpp::debugLog() << "Processing import: " << import->module;
-    if (!import->imports.empty()) {
-        pycpp::debugLog() << " (importing: ";
-        for (const auto& item : import->imports) {
-            pycpp::debugLog() << item << " ";
-        }
-        pycpp::debugLog() << ")";
-    }
-    pycpp::debugLog() << std::endl;
 
-    // Add imported module to symbol table
-    addSymbol(import->module, "module", true);
-    
-    // Add individual imports to symbol table
+// `import graphics` and `import graphics.shapes` both bind `graphics`: merge, don't collide.
+void SemanticAnalyzer::bindModuleName(const std::string& name, ImportStmt* import) {
+    auto& scope = scopes.back();
+    auto it = scope.find(name);
+    if (it != scope.end()) {
+        if (it->second.type == "module") return;   // same namespace, nothing to add
+        error("'" + name + "' conflicts with an existing declaration", import->line, import->column,
+              "use `import ... as <other name>` to bind the module under a different name");
+    }
+    addSymbol(name, "module", true);
+}
+
+void SemanticAnalyzer::analyzeImportStmt(ImportStmt* import) {
+    pycpp::debugLog() << "Processing import: " << import->module << std::endl;
+
+    // `import a.b.c` binds `a`; `import a.b.c as x` binds `x`; `from a.b import n` binds only n.
+    if (!import->is_from) {
+        const std::string bound = !import->alias.empty()
+            ? import->alias
+            : import->module.substr(0, import->module.find('.'));
+        bindModuleName(bound, import);
+    }
+
     for (const auto& item : import->imports) {
+        auto& scope = scopes.back();
+        auto it = scope.find(item);
+        if (it != scope.end() && it->second.type == "imported_symbol") continue;  // imported twice
         addSymbol(item, "imported_symbol", true);
         pycpp::debugLog() << "Added imported symbol: " << item << std::endl;
     }

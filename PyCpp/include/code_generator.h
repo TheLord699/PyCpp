@@ -60,6 +60,7 @@ private:
     TypeInfo exprTypeInfo(Expr* expr);
     void generateObjectOperand(Expr* expr);   // parenthesises (*p), a + b, ... before '.' / '->' / '['
     bool isPointerExpr(Expr* expr);
+    bool isModuleExpr(Expr* expr);   // graphics, graphics.shapes, or an alias
     std::string exprToString(Expr* expr);
     bool usesSelf(Expr* expr);
     void generateTemplateHeader(const std::vector<std::string>& params);

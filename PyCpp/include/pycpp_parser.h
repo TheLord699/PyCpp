@@ -18,6 +18,7 @@ private:
     size_t position;
     int current_indent;
     std::set<std::string> generic_names; // functions/classes declared with [T] parameters
+    std::vector<std::unique_ptr<Stmt>> pending_statements; // extra imports from `import a, b`
 
     // Helper methods
     Token peek();
@@ -81,6 +82,7 @@ public:
     std::unique_ptr<ImportStmt> parseImportStmt();
     std::unique_ptr<UseStmt> parseUseStmt();
     std::unique_ptr<ImportStmt> parseFromImportStmt();
+    std::string parseModulePath();
     std::vector<std::string> parseTypeParams();
     std::vector<std::unique_ptr<Type>> parseTypeArgs();
 

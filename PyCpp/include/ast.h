@@ -311,9 +311,17 @@ public:
 
 class ImportStmt : public Stmt {
 public:
-    std::string module;
+    std::string module;                  // full dotted path: "graphics.shapes"
+    std::string alias;                   // `import x as alias` (empty if absent)
     std::vector<std::string> imports;
-    bool is_from = false; // from module import a, b
+    bool is_from = false;                // from module import a, b
+
+    // Generated files are flattened into temp/ and named after the file stem,
+    // so graphics.shapes -> "shapes" (shapes.h / shapes.cpp).
+    std::string leaf() const {
+        const auto dot = module.rfind('.');
+        return dot == std::string::npos ? module : module.substr(dot + 1);
+    }
     void accept(ASTVisitor& visitor) override;
 };
 

@@ -89,6 +89,7 @@ private:
 
     // NEW: Import statement analysis
     void analyzeImportStmt(ImportStmt* import);
+    void bindModuleName(const std::string& name, ImportStmt* import);
 
     // NEW: Extract member variables from constructors
     void extractMembersFromConstructor(FunctionDef* constructor, ClassDef* cls);

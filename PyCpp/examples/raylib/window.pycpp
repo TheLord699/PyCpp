@@ -3,7 +3,7 @@ use <raylib.h>
 def main() -> int:
     InitWindow(800, 450, "PyCPP + Raylib!")
     
-    while WindowShouldClose() == false:
+    while not WindowShouldClose():
         BeginDrawing()
         ClearBackground(RAYWHITE)
         DrawText("Hello from PyCPP!", 190, 200, 20, LIGHTGRAY)

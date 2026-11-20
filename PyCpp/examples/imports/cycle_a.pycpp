@@ -1,0 +1,4 @@
+import cycle_b
+
+def ping_a() -> str:
+    return "A -> " + cycle_b.pong_b()

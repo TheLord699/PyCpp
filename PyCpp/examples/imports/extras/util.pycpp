@@ -1,0 +1,2 @@
+def extras_triple(n: int) -> int:
+    return n * 3

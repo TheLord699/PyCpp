@@ -1,0 +1,4 @@
+import cycle_a
+
+def pong_b() -> str:
+    return "B (cycle safely broken)"

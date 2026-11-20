@@ -26,7 +26,8 @@ private:
     int indent_level;
     FunctionDef* current_function;
     ClassDef* current_class;
-    std::set<std::string> imported_modules; // identifiers that name an imported module
+    std::map<std::string, std::string> imported_modules; // module name -> its C++ namespace ("" for a bare package prefix)
+    std::string module_namespace;                        // namespace this module's code is wrapped in
 
     // Declared types of the variables currently in scope (innermost scope last).
     // Used to decide things the syntax alone cannot tell, such as '.' vs '->'.
@@ -61,6 +62,7 @@ private:
     void generateObjectOperand(Expr* expr);   // parenthesises (*p), a + b, ... before '.' / '->' / '['
     bool isPointerExpr(Expr* expr);
     bool isModuleExpr(Expr* expr);   // graphics, graphics.shapes, or an alias
+    std::string moduleNamespaceOf(Expr* expr);   // C++ namespace of the module an expression names
     std::string exprToString(Expr* expr);
     bool usesSelf(Expr* expr);
     void generateTemplateHeader(const std::vector<std::string>& params);
@@ -96,6 +98,7 @@ private:
 
 public:
     CodeGenerator();
+    void setNamespace(const std::string& ns) { module_namespace = ns; }
     // Source file (.cpp): function definitions only.
     std::string generate(std::unique_ptr<Program>& program, IncludeManager& include_manager);
     // Header file (.h): classes, structs, templates, constants and function prototypes.

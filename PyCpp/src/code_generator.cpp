@@ -369,6 +369,11 @@ bool CodeGenerator::isModuleExpr(Expr* expr) {
     return lookupVar(name.substr(0, name.find('.'))) == nullptr;
 }
 
+std::string CodeGenerator::moduleNamespaceOf(Expr* expr) {
+    auto it = imported_modules.find(dottedName(expr));
+    return it == imported_modules.end() ? std::string() : it->second;
+}
+
 CodeGenerator::CodeGenerator() : indent_level(0), current_function(nullptr), current_class(nullptr) {
     scopes.emplace_back(); // global scope
 }
@@ -620,7 +625,7 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
             import_includes.push_back("\"" + import_stmt->leaf() + ".h\"");   // graphics.shapes -> "shapes.h"
             if (!import_stmt->is_from) {
                 if (!import_stmt->alias.empty()) {
-                    imported_modules.insert(import_stmt->alias);
+                    imported_modules[import_stmt->alias] = import_stmt->ns();
                 }
                 else {
                     // import a.b.c makes a, a.b and a.b.c valid module references
@@ -628,7 +633,8 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
                     std::istringstream parts(import_stmt->module);
                     for (std::string seg; std::getline(parts, seg, '.');) {
                         prefix += (prefix.empty() ? "" : ".") + seg;
-                        imported_modules.insert(prefix);
+                        if (prefix == import_stmt->module) imported_modules[prefix] = import_stmt->ns();
+                        else imported_modules.emplace(prefix, std::string());   // package prefix: no namespace of its own
                     }
                 }
             }
@@ -639,6 +645,21 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     // (for example std::move needing <utility>) are known when includes are written.
     std::string prefix = output.str(); // include guard in header mode
     output.str("");
+
+    // Every module lives in its own namespace, so two modules can define the same name.
+    // `from m import x` becomes a using-declaration; main() stays global.
+    std::vector<Stmt*> global_funcs;
+    if (!module_namespace.empty()) {
+        output << "namespace " << module_namespace << " {\n";
+        for (auto& stmt : program->statements) {
+            auto from_import = dynamic_cast<ImportStmt*>(stmt.get());
+            if (!from_import || !from_import->is_from) continue;
+            if (header_mode && from_import->cyclic) continue;   // the other header is only half included here
+            for (const auto& name : from_import->imports)
+                output << "using " << from_import->ns() << "::" << name << ";\n";
+        }
+        output << "\n";
+    }
 
     for (auto& stmt : program->statements) {
         Stmt* node = stmt.get();
@@ -672,8 +693,19 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
             }
             if (auto func = dynamic_cast<FunctionDef*>(node)) {
                 if (!func->type_params.empty()) continue; // generic functions live in the header
+                if (func->name == "main") { global_funcs.push_back(node); continue; }
             }
             node->accept(*this);
+            output << "\n";
+        }
+    }
+
+    if (!module_namespace.empty()) output << "}\n\n";
+    if (!global_funcs.empty()) {
+        // main() cannot live in a namespace: let it see the names of its own module
+        if (!module_namespace.empty()) output << "using namespace " << module_namespace << ";\n\n";
+        for (Stmt* global : global_funcs) {
+            global->accept(*this);
             output << "\n";
         }
     }
@@ -1350,6 +1382,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
         // module.function(args): module functions are plain functions in C++
         if (auto module_member = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
             if (isModuleExpr(module_member->object.get())) {
+                const std::string module_ns = moduleNamespaceOf(module_member->object.get());
+                if (!module_ns.empty()) output << module_ns << "::";
                 output << module_member->member << "(";
                 for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                     if (i > 0) output << ", ";
@@ -2241,6 +2275,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
         // Module access (greetings.hello, graphics.shapes.PI, alias.fn): the generated
         // headers declare plain functions, so only the member name is emitted.
         if (isModuleExpr(member_access->object.get())) {
+            const std::string module_ns = moduleNamespaceOf(member_access->object.get());
+            if (!module_ns.empty()) output << module_ns << "::";
             output << member_access->member;
             return;
         }

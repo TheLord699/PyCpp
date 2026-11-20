@@ -1,0 +1,39 @@
+# Import features demo:
+#   - package import            import graphics            (graphics/__init__.pycpp)
+#   - root + submodule merge    import graphics.colors     (binds `graphics` again, no error)
+#   - dotted import with alias  import graphics.shapes as shapes
+#   - comma-separated imports   import tools.util, extras.util as eu
+#   - same file name in two folders (tools/util.pycpp and extras/util.pycpp)
+#   - relative import inside a package (graphics/shapes.pycpp does `import colors`)
+#   - circular imports          cycle_a <-> cycle_b
+#   - from-import               from mathx import square, cube
+# Every result is also asserted, so the program only exits 0 if all of them are right.
+
+import graphics
+import graphics.colors
+import graphics.shapes as shapes
+import tools.util, extras.util as eu
+import cycle_a, cycle_b
+from mathx import square, cube
+
+def main() -> int:
+    print(graphics.init_graphics())
+    print(graphics.colors.get_red())
+    print(shapes.draw_box())
+    print(tools.util.tools_double(4))
+    print(eu.extras_triple(4))
+    print(cycle_a.ping_a())
+    print(square(5))
+    print(cube(2))
+
+    assert graphics.init_graphics() == "Graphics package initialised", "package import"
+    assert graphics.colors.get_red() == "RED", "root + submodule import"
+    assert shapes.draw_box() == "Drawing RED box", "alias + relative import"
+    assert tools.util.tools_double(4) == 8, "tools/util"
+    assert eu.extras_triple(4) == 12, "extras/util through an alias"
+    assert cycle_a.ping_a() == "A -> B (cycle safely broken)", "circular import"
+    assert square(5) == 25, "from-import"
+    assert cube(2) == 8, "from-import"
+
+    print("all import checks passed")
+    return 0

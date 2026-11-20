@@ -1,0 +1,5 @@
+def identify() -> str:
+    return "beta"
+
+def shared_value() -> int:
+    return 22

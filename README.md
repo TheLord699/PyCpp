@@ -568,6 +568,13 @@ There is no requirement to manually create or include header files.
 
 The compiler manages dependencies and generates the necessary C++ includes.
 
+Import handling supports module aliases, dotted/package imports, `from ... import ...`,
+relative imports within packages, and circular-import detection. Each imported module's
+generated declarations are placed in a dedicated C++ namespace so separate modules can
+safely define the same function or class name. Cyclic `from` imports are guarded while
+headers are being generated; see `examples/imports` for the package, alias, duplicate
+module-basename, and cycle examples.
+
 # **13. C/C++ Interoperability**
 
 PyCPP is designed to work alongside existing C and C++ libraries.
@@ -700,6 +707,14 @@ These are demonstrated in the examples:
 - Pointer element iteration: range-for over pointer-valued collections retains
   the pointer element type, allowing member access to generate pointer access
   (`->`) instead of value access (`.`).
+- `match` / `case` pattern selection, including multiple literal alternatives
+  (`case 2 | 3`) and the wildcard fallback (`case _`).
+- `defer` schedules a statement for scope exit, including early returns; the
+  low-level example uses it to release a `mem.alloc` allocation.
+- `input(prompt)` reads a typed value from standard input (the destination
+  variable's declared type determines conversion).
+- `use <header>` includes an external C/C++ header. External libraries can be
+  passed to the generated-code linker with `--linker-flags`.
 
 ### Example projects
 
@@ -708,6 +723,7 @@ These are demonstrated in the examples:
 | `simple` | Basic output, imports, input, arithmetic, built-ins, collections, conditionals, membership tests, literals, and exceptions. |
 | `oop` | Classes, constructors, methods, and object-oriented code. |
 | `nesting` | Nested control flow and imports across modules. |
+| `module_regression` | Regression checks for duplicate exported names across imported modules through distinct module-qualified imports. |
 | `low_level` | Allocation, references, pointer arithmetic, pointer chains, `defer`, `match`, and assertions. |
 | `raylib` | Window drawing, particles, Snake, Dodge, and a multi-file Space Defender project. |
 

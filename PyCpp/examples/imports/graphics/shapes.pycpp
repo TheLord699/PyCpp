@@ -1,0 +1,4 @@
+import colors
+
+def draw_box() -> str:
+    return "Drawing " + colors.get_red() + " box"

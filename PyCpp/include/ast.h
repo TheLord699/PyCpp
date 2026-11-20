@@ -316,10 +316,16 @@ public:
     std::vector<std::string> imports;
     bool is_from = false;                // from module import a, b
 
-    // Generated files are flattened into temp/ and named after the file stem,
-    // so graphics.shapes -> "shapes" (shapes.h / shapes.cpp).
+    // Name (without extension) of the generated .h/.cpp pair this import refers to.
+    // Filled in by the driver once the module has been resolved to a file, so that
+    // graphics/shapes.pycpp -> "graphics_shapes" and graphics/__init__.pycpp -> "graphics".
+    std::string header_stem;
+    bool cyclic = false;     // this import is part of an import cycle
+    // C++ namespace that holds the imported module's declarations
+    std::string ns() const { return "pycpp_" + leaf(); }
     std::string leaf() const {
-        const auto dot = module.rfind('.');
+        if (!header_stem.empty()) return header_stem;
+        const auto dot = module.rfind('.');   // not resolved: best guess
         return dot == std::string::npos ? module : module.substr(dot + 1);
     }
     void accept(ASTVisitor& visitor) override;

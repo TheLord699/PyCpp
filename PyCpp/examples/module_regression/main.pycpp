@@ -1,0 +1,12 @@
+# Regression: imported modules may expose identical symbol names.
+# Generated C++ declarations must stay in their own module namespaces.
+import alpha
+import beta
+
+def main() -> int:
+    assert alpha.identify() == "alpha", "alpha module namespace"
+    assert beta.identify() == "beta", "beta module namespace"
+    assert alpha.shared_value() == 11, "alpha duplicate symbol"
+    assert beta.shared_value() == 22, "beta duplicate symbol"
+    print("module namespace regression passed")
+    return 0

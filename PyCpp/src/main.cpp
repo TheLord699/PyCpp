@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <vector>
+#include <map>
+#include <set>
 #include <iomanip>
 
 // Use only the specific Windows functionality we need, avoid windows.h
@@ -183,7 +185,14 @@ void generateHeaderAndImplementation(std::unique_ptr<Program>& ast,
     for (char& c : guard_name) c = std::isalnum(static_cast<unsigned char>(c)) ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : '_';
     guard_name = "PYCPP_" + guard_name + "_H";
 
+    // Every module's declarations live in their own namespace, named after its generated
+    // file; importing modules use the same name (ImportStmt::ns).
+    std::string module_ns = std::filesystem::path(base_filename).filename().string();
+    for (char& c : module_ns) if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+    module_ns = "pycpp_" + module_ns;
+
     CodeGenerator header_gen;
+    header_gen.setNamespace(module_ns);
     std::string header_content = header_gen.generateHeader(ast, include_manager, guard_name);
 
     std::string header_filename = base_filename + ".h";
@@ -198,6 +207,7 @@ void generateHeaderAndImplementation(std::unique_ptr<Program>& ast,
 
     // Generate implementation file with ONLY function implementations
     CodeGenerator code_gen;
+    code_gen.setNamespace(module_ns);
     include_manager.trackManualInclude("\"" + base_filename + ".h\"");
 
     std::string cpp_content = code_gen.generate(ast, include_manager);
@@ -234,33 +244,102 @@ std::unique_ptr<Program> loadModule(const std::string& file) {
     return ast;
 }
 
+// Name (without extension) of the generated .h/.cpp pair of every module.
+// It is the module's path relative to the entry file's folder, with separators turned
+// into '_':   graphics/shapes.pycpp   -> graphics_shapes
+//             graphics/__init__.pycpp -> graphics        (a package is named after its folder)
+// so modules with the same file name in different folders never share a generated name.
+static std::map<std::string, std::string> computeModuleStems(const std::vector<std::string>& files) {
+    namespace fs = std::filesystem;
+    std::map<std::string, std::string> stems;
+    if (files.empty()) return stems;
+
+    const fs::path root = fs::path(files.front()).parent_path();   // files.front() is the entry file
+    std::map<std::string, std::string> owner;                      // generated name -> source file
+
+    auto sanitize = [](std::string s) {
+        for (char& c : s)
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') c = '_';
+        return s;
+    };
+
+    for (const auto& file : files) {
+        const fs::path p(file);
+        fs::path rel = p.lexically_relative(root);
+        if (rel.empty() || rel.begin()->string() == "..") {
+            // Outside the entry folder (-I path, ./lib): keep the parent folder's name
+            rel = fs::path(p.parent_path().filename()) / p.filename();
+        }
+
+        std::vector<std::string> parts;
+        for (const auto& part : rel.parent_path()) parts.push_back(part.string());
+        const std::string leaf = rel.stem().string();
+        if (leaf != "__init__" || parts.empty()) parts.push_back(leaf);
+
+        std::string stem;
+        for (const auto& part : parts) stem += (stem.empty() ? "" : "_") + part;
+        stem = sanitize(stem);
+
+        auto inserted = owner.emplace(stem, file);
+        if (!inserted.second && inserted.first->second != file)
+            throw std::runtime_error("modules '" + inserted.first->second + "' and '" + file +
+                "' would both generate '" + stem + ".h'; rename one of them");
+        stems[file] = stem;
+    }
+    return stems;
+}
+
 // Generate multiple files for multi-file compilation.
 // All modules are parsed and registered first, so a class can see the members of a
 // base class that lives in another module.
-void generateMultiFileOutput(const std::vector<std::string>& files, const std::string& tempDir, bool verbose) {
+void generateMultiFileOutput(const std::vector<std::string>& files, const std::string& tempDir, bool verbose,
+    ImportResolver& resolver, const std::map<std::string, std::string>& stems) {
     std::vector<std::pair<std::string, std::unique_ptr<Program>>> modules;
-    {
-        // Imports are by name, and generated files are named after the module, so two
-        // different files with the same name cannot coexist.
-        std::map<std::string, std::string> stems;
-        for (const auto& file : files) {
-            const std::string stem = std::filesystem::path(file).stem().string();
-            auto inserted = stems.emplace(stem, file);
-            if (!inserted.second && inserted.first->second != file)
-                throw std::runtime_error("modules '" + inserted.first->second + "' and '" + file +
-                    "' share the name '" + stem + "'; imports are by name, so rename one of them");
-        }
-    }
     for (const auto& file : files) {
         if (verbose) TerminalFormatter::printInfo("Processing: " + file);
         auto ast = loadModule(file);
         pycpp::registerClasses(ast.get());
         modules.emplace_back(file, std::move(ast));
     }
+
+    // Point every import at the header (and namespace) its target file generates, and
+    // find the imports that are part of an import cycle
+    std::map<std::string, std::vector<std::string>> graph;   // file -> files it imports
+    for (auto& [file, ast] : modules) {
+        for (auto& stmt : ast->statements) {
+            auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get());
+            if (!import_stmt) continue;
+            const std::string target = resolver.findModuleFile(import_stmt->module, file);
+            auto it = stems.find(target);
+            if (it != stems.end()) import_stmt->header_stem = it->second;
+            if (!target.empty()) graph[file].push_back(target);
+        }
+    }
+    auto reaches = [&graph](const std::string& from, const std::string& goal) {
+        std::set<std::string> seen;
+        std::vector<std::string> stack{ from };
+        while (!stack.empty()) {
+            const std::string current = stack.back();
+            stack.pop_back();
+            if (current == goal) return true;
+            if (!seen.insert(current).second) continue;
+            for (const auto& next : graph[current]) stack.push_back(next);
+        }
+        return false;
+    };
+    for (auto& [file, ast] : modules) {
+        for (auto& stmt : ast->statements) {
+            auto import_stmt = dynamic_cast<ImportStmt*>(stmt.get());
+            if (!import_stmt) continue;
+            const std::string target = resolver.findModuleFile(import_stmt->module, file);
+            import_stmt->cyclic = !target.empty() && reaches(target, file);
+        }
+    }
+
     for (auto& [file, ast] : modules) {
         IncludeManager include_manager;
         generateHeaderAndImplementation(ast,
-            (std::filesystem::path(tempDir) / std::filesystem::path(file).stem()).string(), include_manager);
+            (std::filesystem::path(tempDir) / stems.at(file)).string(), include_manager);
     }
 }
 
@@ -429,7 +508,8 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         }
 
         // Generate .h and .cpp for each file
-        generateMultiFileOutput(all_files, tempDir.string(), verbose);
+        const auto stems = computeModuleStems(all_files);
+        generateMultiFileOutput(all_files, tempDir.string(), verbose, resolver, stems);
 
         if (noCompile) {
             TerminalFormatter::printSuccess("Generated " + std::to_string(all_files.size()) + " header/implementation pairs in: " + tempDir.string());
@@ -439,8 +519,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
         // Compile all generated .cpp files together
         std::vector<std::string> cppFiles;
         for (const auto& file : all_files) {
-            std::filesystem::path filePath(file);
-            std::string moduleName = filePath.stem().string();
+            std::string moduleName = stems.at(file);
             cppFiles.push_back((tempDir / (moduleName + ".cpp")).string());
         }
 
@@ -462,7 +541,7 @@ bool compileMultiFile(const std::string& inputFile, const std::string& outputBas
                 // Remove all generated files
                 for (const auto& file : all_files) {
                     std::filesystem::path filePath(file);
-                    std::string moduleName = filePath.stem().string();
+                    std::string moduleName = stems.at(file);
 
                     std::filesystem::remove(tempDir / (moduleName + ".cpp"));
                     std::filesystem::remove(tempDir / (moduleName + ".h"));

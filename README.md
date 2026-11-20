@@ -8,6 +8,123 @@ It combines Python's simplicity and readability with C++'s performance, control,
 
 The goal is simple: **Everything C++ can do, PyCPP should be able to do — with cleaner, more Pythonic syntax.**
 
+# Quick Start
+
+Get started with PyCPP in a few minutes.
+
+PyCPP translates `.pycpp` source files into modern C++ and then compiles them into native executables using GCC or MSVC.
+
+## 1. Prerequisites
+
+Before building PyCPP, make sure you have the following installed:
+
+- **Git** — to clone the repository.
+- **CMake** — to configure and build the project.
+- **C++ compiler** — GCC (g++) or Microsoft Visual C++ (MSVC).
+
+Make sure your chosen C++ compiler and CMake are accessible through your system PATH.
+
+For Windows GCC builds, you need a working MinGW-w64 installation.
+
+## 2. Download PyCPP
+
+Clone the repository and enter its directory:
+
+```bash
+git clone https://github.com/TheLord699/PyCpp.git
+cd PyCpp
+```
+
+## 3. Build the PyCPP compiler
+
+Choose the build configuration that matches your platform and compiler.
+
+**Windows (GCC / MinGW):**
+
+```bash
+cmake --preset windows-gcc-release
+cmake --build --preset windows-gcc-release
+```
+
+**Windows (MSVC):**
+
+```bash
+cmake --preset x64-release
+cmake --build --preset x64-release
+```
+
+**Linux (GCC):**
+
+```bash
+cmake --preset linux-gcc-release
+cmake --build --preset linux-gcc-release
+```
+
+These commands configure and build the PyCPP compiler itself in Release mode.
+
+After building, locate the generated `pycpp` executable and add its directory to your system PATH if you want to run it from any directory.
+
+Alternatively, you can invoke it directly using its full path.
+
+## 4. Write your first PyCPP program
+
+Create a file named `hello.pycpp`:
+
+```python
+def main() -> int:
+    print("Hello from PyCPP")
+    return 0
+```
+
+PyCPP uses Python-inspired syntax, but unlike Python, all variables and function signatures are statically typed.
+
+## 5. Compile and run
+
+**Using GCC:**
+
+```bash
+pycpp hello.pycpp --compiler gcc
+```
+
+**Using MSVC (Windows):**
+
+```bash
+pycpp hello.pycpp --compiler msvc
+```
+
+The compiler will:
+
+1. Parse your PyCPP source code.
+2. Perform type checking and semantic analysis.
+3. Generate equivalent modern C++ code.
+4. Invoke the selected C++ compiler.
+5. Produce and execute the native program.
+
+Expected output:
+
+```text
+Hello from PyCPP
+```
+
+PyCPP returns the exit code of the program it executes.
+
+## 6. Compiler selection
+
+You can explicitly choose which C++ compiler PyCPP uses:
+
+| Argument          | Compiler                     |
+| ----------------- | ---------------------------- |
+| `--compiler gcc`  | GCC / g++                    |
+| `--compiler msvc` | Microsoft Visual C++         |
+| No argument       | Automatic platform selection |
+
+On Windows, automatic selection defaults to MSVC. On Linux and macOS, it defaults to GCC.
+
+If the selected compiler cannot be found, PyCPP reports an error rather than silently switching to another compiler.
+
+**That's it!** You have successfully built the PyCPP compiler and compiled your first PyCPP program into a native executable.
+
+
 # **1. Core Features**
 
 - Python-inspired syntax with C++ semantics.

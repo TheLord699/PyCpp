@@ -5,6 +5,7 @@ param(
     [switch]$List
 )
 
+$PSNativeCommandUseErrorActionPreference = $false
 $base = Join-Path $PSScriptRoot "PyCpp\examples"
 $gui = @("--linker-flags", "-lraylib -lopengl32 -lgdi32 -lwinmm")
 $script:results = @()
@@ -23,10 +24,16 @@ function Run($title, $dir, $file, $extra = @(), $expectedExit = 0) {
     if ($Verbose) {
         $args += "-v"
         $logFile = Join-Path $logDir "$($title -replace '[^\w]', '_').log"
-        pycpp @args 2>&1 | Tee-Object -FilePath $logFile
+
+        # Capture stdout and stderr without PowerShell interpreting
+        # native stderr as PowerShell errors.
+        $output = & pycpp @args 2>&1
         $actualExit = $LASTEXITCODE
+
+        # Display and save output
+        $output | ForEach-Object { "$_" } | Tee-Object -FilePath $logFile
     } else {
-        pycpp @args
+        & pycpp @args
         $actualExit = $LASTEXITCODE
     }
 

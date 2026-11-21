@@ -1,0 +1,8 @@
+# expect-exit: nonzero
+struct Node:
+    x: int
+
+def main() -> int:
+    p: *Node = nullptr
+    print(p.x)
+    return 0

@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-stderr: has no 'main' function
+def helper() -> int:
+    return 1

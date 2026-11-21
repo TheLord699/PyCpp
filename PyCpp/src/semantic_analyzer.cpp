@@ -1,6 +1,7 @@
 #include "../include/log.h"
 #include "../include/semantic_analyzer.h"
 #include "../include/diagnostics.h"
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -139,6 +140,15 @@ void SemanticAnalyzer::enterScope() {
 
 void SemanticAnalyzer::exitScope() {
     if (scopes.size() > 1) {
+        // [fix2] variables that were declared but never mentioned again
+        std::vector<const Symbol*> unused;
+        for (const auto& kv : scopes.back())
+            if (kv.second.is_var && !kv.second.used && !kv.first.empty() && kv.first[0] != '_')
+                unused.push_back(&kv.second);
+        std::sort(unused.begin(), unused.end(), [](const Symbol* a, const Symbol* b) { return a->line < b->line; });
+        for (const Symbol* s : unused)
+            warning("unused variable '" + s->name + "'", s->line, s->column,
+                    "if this is intentional, rename it to '_" + s->name + "'", static_cast<int>(s->name.size()));
         scopes.pop_back();
         current_scope--;
     }
@@ -156,6 +166,8 @@ void SemanticAnalyzer::addSymbol(const std::string& name, const std::string& typ
     symbol.type = type;
     symbol.is_initialized = initialized;
     symbol.scope_level = current_scope;
+    symbol.line = line;
+    symbol.column = column;   // [fix2]
 
     scopes.back()[name] = symbol;
     pycpp::debugLog() << "Added symbol: " << name << " : " << type << " at scope " << current_scope << std::endl;
@@ -223,8 +235,23 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
     }
 
     // Check template types (basic check)
-    if (type.find("std::vector<") == 0 || type.find("std::map<") == 0) {
-        return true; // Simplified check
+    if ((type.find("std::vector<") == 0 || type.find("std::map<") == 0) && type.back() == '>') {
+        // [fix2] check the element types too: list[Playr] is an error, not "simplified"
+        const size_t open = type.find('<');
+        const std::string inner = type.substr(open + 1, type.size() - open - 2);
+        int depth = 0;
+        size_t start = 0;
+        bool ok = true;
+        for (size_t i = 0; i <= inner.size(); ++i) {
+            const char c = i < inner.size() ? inner[i] : ',';
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == ',' && depth == 0) {
+                if (!isValidType(inner.substr(start, i - start))) ok = false;
+                start = i + 1;
+            }
+        }
+        return ok;
     }
 
     return false;
@@ -469,6 +496,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             pycpp::debugLog() << "WARNING: Symbol '" << ident->name << "' not found, but continuing..." << std::endl;
         }
         else {
+            symbol->used = true;   // [fix2]
             pycpp::debugLog() << "Found identifier: " << ident->name << " : " << symbol->type << std::endl;
         }
     }
@@ -617,6 +645,46 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             analyzeExpression(arg.get());
         }
 
+        // [fix2] arity and argument types of calls to user-defined functions
+        if (!call->is_subscript) {
+            if (auto callee = dynamic_cast<Identifier*>(call->callee.get())) {
+                auto fn = functions.find(callee->name);
+                Symbol* bound = findSymbol(callee->name);
+                bool keyword_args = false;
+                for (auto& a : call->arguments)
+                    if (auto b = dynamic_cast<BinaryOp*>(a.get()); b && b->op == "=") keyword_args = true;
+                if (fn != functions.end() && bound && bound->type == "function" &&
+                    !fn->second.generic && !keyword_args) {
+                    const FunctionSymbol& fs = fn->second;
+                    const size_t given = call->arguments.size();
+                    const size_t total = fs.parameters.size();
+                    auto plural = [](size_t n) { return std::to_string(n) + (n == 1 ? " argument" : " arguments"); };
+                    std::string signature = callee->name + "(";
+                    for (size_t i = 0; i < total; ++i)
+                        signature += (i ? ", " : "") + fs.parameters[i].first + ": " + friendlyType(fs.parameters[i].second);
+                    signature += ") -> " + friendlyType(fs.return_type);
+                    if (given < fs.required || given > total) {
+                        const std::string expected = fs.required == total ? plural(total)
+                            : std::to_string(fs.required) + " to " + plural(total);
+                        error("function '" + callee->name + "' takes " + expected + " but " + std::to_string(given) +
+                              (given == 1 ? " was" : " were") + " supplied", call->line, call->column,
+                              "signature: " + signature, static_cast<int>(callee->name.size()));
+                    }
+                    static const std::unordered_set<std::string> simple = {
+                        "int", "float", "double", "bool", "char", "str", "string", "std::string" };
+                    for (size_t i = 0; i < given && i < total; ++i) {
+                        const std::string expected = fs.parameters[i].second;
+                        const std::string found = getExpressionType(call->arguments[i].get());
+                        if (simple.count(expected) && simple.count(found) && !typesAreCompatible(expected, found))
+                            error("mismatched types: argument " + std::to_string(i + 1) + " of '" + callee->name +
+                                  "' expects " + friendlyType(expected) + ", found " + friendlyType(found),
+                                  call->arguments[i]->line, call->arguments[i]->column,
+                                  "signature: " + signature, 1);
+                    }
+                }
+            }
+        }
+
         // Track built-in function calls
         if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
             if (ident->name == "print") {
@@ -721,9 +789,11 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
             func_sym.name = func->name;
             func_sym.return_type = typeToString(func->return_type.get());
             func_sym.has_return = false;
+            func_sym.generic = !func->type_params.empty();   // [fix2]
 
             for (const auto& param : func->parameters) {
                 func_sym.parameters.emplace_back(param.name, typeToString(param.type.get()));
+                if (!param.default_value) func_sym.required = func_sym.parameters.size();
             }
 
             functions[func->name] = func_sym;
@@ -768,6 +838,45 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
         std::vector<pycpp::Diagnostic> all = std::move(collected);
         collected.clear();
         throw pycpp::CompileError(std::move(all));
+    }
+}
+
+void SemanticAnalyzer::checkUnreachable(const std::vector<std::unique_ptr<Stmt>>& body) {
+    // [fix2] code after return/break/continue/raise in the same block never runs
+    for (size_t i = 0; i < body.size(); ++i) {
+        Stmt* s = body[i].get();
+        if (auto f = dynamic_cast<IfStmt*>(s)) {
+            checkUnreachable(f->then_branch);
+            for (auto& e : f->elif_branches) checkUnreachable(e.second);
+            checkUnreachable(f->else_branch);
+        }
+        else if (auto w = dynamic_cast<WhileStmt*>(s)) checkUnreachable(w->body);
+        else if (auto fo = dynamic_cast<ForStmt*>(s)) checkUnreachable(fo->body);
+        else if (auto u = dynamic_cast<UnsafeBlock*>(s)) checkUnreachable(u->body);
+        else if (auto d = dynamic_cast<DeferStmt*>(s)) checkUnreachable(d->body);
+        else if (auto t = dynamic_cast<TryStmt*>(s)) {
+            checkUnreachable(t->body);
+            for (auto& h : t->handlers) checkUnreachable(h.body);
+            checkUnreachable(t->else_body);
+            checkUnreachable(t->finally_body);
+        }
+        else if (auto m = dynamic_cast<MatchStmt*>(s)) {
+            for (auto& c : m->cases) checkUnreachable(c.body);
+        }
+
+        const char* what = nullptr;
+        if (dynamic_cast<ReturnStmt*>(s)) what = "return";
+        else if (dynamic_cast<BreakStmt*>(s)) what = "break";
+        else if (dynamic_cast<ContinueStmt*>(s)) what = "continue";
+        else if (dynamic_cast<RaiseStmt*>(s)) what = "raise";
+        if (what && i + 1 < body.size()) {
+            Stmt* next = body[i + 1].get();
+            int ln = next->line, col = next->column;
+            if (auto es = dynamic_cast<ExprStmt*>(next); es && es->expr) { ln = es->expr->line; col = es->expr->column; }
+            warning("unreachable code", ln, col,
+                    std::string("nothing after this `") + what + "` in the same block can run; remove it or move it before the `" + what + "`", 1);
+            return;
+        }
     }
 }
 
@@ -931,7 +1040,8 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
                     return;
                 }
             }
-            addSymbol(var->var_name, type_name, var->value != nullptr);
+            addSymbol(var->var_name, type_name, var->value != nullptr, var->line, var->column);
+            scopes.back()[var->var_name].is_var = (current_function != nullptr);   // [fix2]
         }
     }
 
@@ -942,6 +1052,20 @@ void SemanticAnalyzer::analyzeVarDecl(VarDecl* var) {
             error("mismatched types: '" + var->var_name + "' is " + friendlyType(type_name) +
                 ", but the value is " + friendlyType(expr_type), var->line, var->column,
                 "convert explicitly, e.g. int(x), float(x) or str(x)");
+        }
+    }
+
+    // [fix2] a float value stored in an integer variable silently loses its fractional part
+    if (var->value) {
+        static const std::unordered_set<std::string> integer_types = {
+            "int", "int8_t", "int16_t", "int32_t", "int64_t", "char" };
+        if (integer_types.count(type_name)) {
+            bool fractional = dynamic_cast<FloatLiteral*>(var->value.get()) != nullptr;
+            if (auto b = dynamic_cast<BinaryOp*>(var->value.get())) if (b->op == "/") fractional = true;
+            if (fractional)
+                warning("this value is a float but '" + var->var_name + "' is " + friendlyType(type_name),
+                        var->value->line, var->value->column,
+                        "the fractional part is lost; use // for integer division, or declare the variable as float", 1);
         }
     }
 
@@ -1040,6 +1164,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionDef* func) {
         pycpp::debugLog() << "Added parameter to function scope: " << param.name << " : " << param_type << std::endl;
     }
 
+    checkUnreachable(func->body);   // [fix2]
     // FIXED: Single pass for analyzing function body
     // Don't pre-collect variable declarations separately
     for (auto& stmt : func->body) {
@@ -1146,8 +1271,8 @@ bool SemanticAnalyzer::isValidAssignmentTarget(Expr* expr) {
 
     // Allow array subscript (arr[index])
     if (auto call = dynamic_cast<CallExpr*>(expr)) {
-        if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
-            return true; // Assume it's array access
+        if (call->is_subscript) {
+            return true; // a[i], obj.items[i], a[i][j]   [fix2]
         }
     }
 

@@ -98,6 +98,10 @@ public:
     std::unique_ptr<Expr> parseNot();
     std::unique_ptr<Expr> parseComparisonWithIs();
     std::unique_ptr<Expr> parseComparison();
+    std::unique_ptr<Expr> parseBitOr();    // [fix2]
+    std::unique_ptr<Expr> parseBitXor();
+    std::unique_ptr<Expr> parseBitAnd();
+    std::unique_ptr<Expr> parseShift();
     std::unique_ptr<Expr> parseTerm();
     std::unique_ptr<Expr> parseFactor();
     std::unique_ptr<Expr> parseUnary();

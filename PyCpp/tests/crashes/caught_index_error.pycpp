@@ -1,0 +1,9 @@
+# expect-exit: 0
+# expect-stdout: caught
+def main() -> int:
+    nums: list[int] = [1, 2, 3]
+    try:
+        print(nums[5])
+    except IndexError as e:
+        print("caught")
+    return 0

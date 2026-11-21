@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-stderr: invalid assignment target
+def f(n: int) -> int:
+    return n
+
+def main() -> int:
+    f(1) = 2
+    return 0

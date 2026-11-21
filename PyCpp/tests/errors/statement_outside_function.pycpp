@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: only allowed inside a function
+print("top level")
+
+def main() -> int:
+    return 0

@@ -1,0 +1,10 @@
+# expect-exit: 1
+# expect-stderr: the name 'f' is defined more than once
+def f() -> int:
+    return 1
+
+def f() -> int:
+    return 2
+
+def main() -> int:
+    return 0

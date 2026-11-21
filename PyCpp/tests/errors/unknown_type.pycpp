@@ -1,0 +1,10 @@
+# expect-exit: 1
+# expect-stderr: cannot find type 'Playr' in this scope
+# expect-stderr: did you mean 'Player'?
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+
+def main() -> int:
+    hero: Playr = Player("Keith")
+    return 0

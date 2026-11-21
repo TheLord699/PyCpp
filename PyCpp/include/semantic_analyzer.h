@@ -16,6 +16,9 @@ private:
         std::string type;
         bool is_initialized;
         int scope_level;
+        int line = 0, column = 0;   // [fix2] where it was declared
+        bool used = false;          // mentioned after its declaration
+        bool is_var = false;        // a local variable (candidate for the unused warning)
     };
 
     struct FunctionSymbol {
@@ -23,6 +26,8 @@ private:
         std::string return_type;
         bool has_return;
         std::vector<std::pair<std::string, std::string>> parameters;
+        size_t required = 0;      // [fix2] parameters without a default value
+        bool generic = false;
     };
 
     struct ClassSymbol {
@@ -74,6 +79,7 @@ private:
     void analyzeStatement(Stmt* stmt);
     void analyzeGuarded(Stmt* stmt);                  // [diag-fix] records an error and keeps going
     std::vector<pycpp::Diagnostic> collected;
+    void checkUnreachable(const std::vector<std::unique_ptr<Stmt>>& body);   // [fix2]
     void analyzeVarDecl(VarDecl* var);
     void analyzeFunction(FunctionDef* func);
     void analyzeClass(ClassDef* cls);

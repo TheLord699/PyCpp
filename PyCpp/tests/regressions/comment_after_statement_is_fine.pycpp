@@ -1,0 +1,6 @@
+# expect-exit: 0
+# expect-stdout: done
+def main() -> int:
+    x: int = 1   # a trailing comment must not trip the statement-end check
+    print("done")  # and neither must this one
+    return x - 1

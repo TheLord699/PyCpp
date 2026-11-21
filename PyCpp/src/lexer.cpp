@@ -25,7 +25,7 @@ char Lexer::advance() {
 }
 
 void Lexer::skipWhitespace() {
-    while (std::isspace(peek()) && peek() != '\n') {
+    while (std::isspace(static_cast<unsigned char>(peek())) && peek() != '\n') {
         advance();
     }
 }
@@ -43,7 +43,7 @@ Token Lexer::readNumber() {
     int start_line = line;
     int start_column = column;
 
-    while (std::isdigit(peek())) {
+    while (std::isdigit(static_cast<unsigned char>(peek()))) {
         number += advance();
     }
 
@@ -65,7 +65,7 @@ Token Lexer::readNumber() {
     // Check for decimal point
     if (peek() == '.') {
         number += advance();
-        while (std::isdigit(peek())) {
+        while (std::isdigit(static_cast<unsigned char>(peek()))) {
             number += advance();
         }
     }
@@ -77,7 +77,7 @@ Token Lexer::readNumber() {
         if (digit_at < source.length() && std::isdigit(static_cast<unsigned char>(source[digit_at]))) {
             number += advance();
             if (next == '+' || next == '-') number += advance();
-            while (std::isdigit(peek())) number += advance();
+            while (std::isdigit(static_cast<unsigned char>(peek()))) number += advance();
         }
     }
 
@@ -125,7 +125,7 @@ Token Lexer::readIdentifier() {
     int start_line = line;
     int start_column = column;
 
-    while (std::isalnum(peek()) || peek() == '_') {
+    while (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_') {
         identifier += advance();
     }
 
@@ -197,7 +197,7 @@ Token Lexer::readIdentifier() {
         {"tuple", TokenType::TUPLE},
         {"set", TokenType::SET},
         {"vector", TokenType::VECTOR},
-        {"map", TokenType::MAP},
+        // "map" lexes as the builtin map(f, xs); see MAP_FUNC below  [fix2]
         {"array", TokenType::ARRAY},
 
         // Built-in functions
@@ -450,12 +450,12 @@ Token Lexer::readOperator() {
         }
 
         // For use statements, read the entire library name as one token
-        if (std::isalpha(peek())) {
+        if (std::isalpha(static_cast<unsigned char>(peek()))) {
             std::string library;
             library += c; // Include the '<'
 
             // Read the library name
-            while (std::isalnum(peek()) || peek() == '_' || peek() == '/' || peek() == '.') {
+            while (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_' || peek() == '/' || peek() == '.') {
                 library += advance();
             }
 
@@ -620,16 +620,16 @@ std::vector<Token> Lexer::tokenize() {
         char c = peek();
         if (c == '\0') break;
 
-        if (std::isdigit(c)) {
+        if (std::isdigit(static_cast<unsigned char>(c))) {
             tokens.push_back(readNumber());
         }
-        else if (std::isalpha(c) || c == '_') {
+        else if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             tokens.push_back(readIdentifier());
         }
         else if (c == '"' || c == '\'') {
             tokens.push_back(readString());
         }
-        else if (std::ispunct(c)) {
+        else if (std::ispunct(static_cast<unsigned char>(c))) {
             tokens.push_back(readOperator());
             switch (tokens.back().type) {
             case TokenType::LPAREN:

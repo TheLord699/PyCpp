@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-stderr: custom failure
+class AppError(Exception):
+    def __init__(self, message: str):
+        self.code: int = 7
+
+def main() -> int:
+    raise AppError("custom failure")

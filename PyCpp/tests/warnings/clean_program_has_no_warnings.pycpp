@@ -1,0 +1,12 @@
+# expect-exit: 0
+# expect-no-stderr: warning
+# expect-stdout: 5
+def square(n: int) -> int:
+    return n * n
+
+def main() -> int:
+    total: int = 0
+    for i in range(3):
+        total += i
+    print(total + 2 + square(0))
+    return 0

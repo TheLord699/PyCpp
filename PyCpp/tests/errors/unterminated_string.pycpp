@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: unterminated string literal
+# expect-stderr: add the closing quote
+def main() -> int:
+    print("oops)
+    return 0

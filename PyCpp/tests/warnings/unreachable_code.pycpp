@@ -1,0 +1,10 @@
+# expect-exit: 0
+# expect-stderr: unreachable code
+# expect-stdout: 1
+def helper() -> int:
+    return 1
+    print("never")
+
+def main() -> int:
+    print(helper())
+    return 0

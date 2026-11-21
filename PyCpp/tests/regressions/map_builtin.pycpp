@@ -1,0 +1,10 @@
+# expect-exit: 0
+# expect-stdout: [2, 4, 6]
+def twice(n: int) -> int:
+    return n * 2
+
+def main() -> int:
+    nums: list[int] = [1, 2, 3]
+    doubled: list[int] = map(twice, nums)
+    print(doubled)
+    return 0

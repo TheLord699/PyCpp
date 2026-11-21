@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: IndexError: index 10 out of range (size 3)
+def main() -> int:
+    nums: list[int] = [1, 2, 3]
+    print(nums[10])
+    return 0

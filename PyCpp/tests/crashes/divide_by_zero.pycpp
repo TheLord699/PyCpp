@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: ZeroDivisionError: division by zero
+def main() -> int:
+    zero: int = 0
+    print(10 / zero)
+    return 0

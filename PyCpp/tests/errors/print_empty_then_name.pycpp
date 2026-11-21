@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: after the end of the statement
+# expect-no-stderr: the generated C++ failed to compile
+def main() -> int:
+    print()dads
+    return 0

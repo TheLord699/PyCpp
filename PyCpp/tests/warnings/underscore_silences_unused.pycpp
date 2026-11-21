@@ -1,0 +1,7 @@
+# expect-exit: 0
+# expect-no-stderr: unused variable
+# expect-stdout: clean
+def main() -> int:
+    _ignored: int = 5
+    print("clean")
+    return 0

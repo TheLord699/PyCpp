@@ -1,0 +1,9 @@
+# expect-exit: 1
+# expect-stderr: cannot find type 'list[Playr]'
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+
+def main() -> int:
+    team: list[Playr] = []
+    return 0

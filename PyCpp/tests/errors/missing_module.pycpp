@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: cannot find module 'does_not_exist'
+# expect-stderr: -I <path>
+import does_not_exist
+
+def main() -> int:
+    return 0

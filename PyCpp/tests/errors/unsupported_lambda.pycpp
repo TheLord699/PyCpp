@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: 'lambda' is not supported yet
+def main() -> int:
+    f: auto = lambda a: a
+    return 0

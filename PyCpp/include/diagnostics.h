@@ -73,7 +73,8 @@ inline bool useColor() {
     static const bool on = [] {
         if (std::getenv("NO_COLOR") || !PYCPP_ISATTY(PYCPP_FILENO(stderr))) return false;
 #ifdef _WIN32
-        return std::getenv("WT_SESSION") != nullptr || std::getenv("ANSICON") != nullptr;
+        return std::getenv("WT_SESSION") != nullptr || std::getenv("ANSICON") != nullptr ||
+               std::getenv("TERM") != nullptr || std::getenv("PYCPP_COLOR") != nullptr;   // [fix2]
 #else
         return true;
 #endif

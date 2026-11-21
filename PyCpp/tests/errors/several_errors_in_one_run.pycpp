@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-stderr: cannot find 'nope_one'
+# expect-stderr: cannot find 'nope_two'
+# expect-stderr: could not compile due to 2 errors
+def main() -> int:
+    print(nope_one)
+    print(nope_two)
+    return 0

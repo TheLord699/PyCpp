@@ -50,6 +50,8 @@ class RuntimeError : public Exception { public: using Exception::Exception; cons
     if (k == "OverflowError") throw OverflowError(message);
     if (k == "ValueError") throw ValueError(message);
     if (k == "TypeError") throw TypeError(message);
+    if (k == "IndexError") throw IndexError(message);
+    if (k == "KeyError") throw KeyError(message);
     throw RuntimeError(message);
 }
 
@@ -308,6 +310,25 @@ public:
     ~Defer() { fn(); }
 };
 template <class F> Defer(F) -> Defer<F>;
+
+// a[i]: negative indices count from the end, an index out of range raises IndexError
+template <class C, class I>
+decltype(auto) at(C&& c, I i) {
+    using Plain = std::remove_cv_t<std::remove_reference_t<C>>;
+    constexpr bool direct = std::is_pointer_v<Plain> || std::is_array_v<Plain> ||
+                            !std::is_integral_v<I> || requires { typename Plain::mapped_type; };
+    if constexpr (direct) {
+        return (c[i]);
+    } else {
+        const long long n = static_cast<long long>(c.size());
+        long long k = static_cast<long long>(i);
+        if (k < 0) k += n;
+        if (k < 0 || k >= n)
+            fail("IndexError", "index " + std::to_string(static_cast<long long>(i)) +
+                               " out of range (size " + std::to_string(n) + ")");
+        return (c[static_cast<size_t>(k)]);
+    }
+}
 
 } // namespace pycpp
 

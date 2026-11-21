@@ -1,0 +1,9 @@
+# expect-exit: 0
+# expect-stderr: contains no 'return'
+# expect-stdout: fine
+def noreturn(n: int) -> int:
+    print(n)
+
+def main() -> int:
+    print("fine")
+    return 0

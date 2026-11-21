@@ -1,0 +1,16 @@
+# expect-exit: 1
+# expect-stderr: no member named 'scor'
+# expect-stderr: did you mean 'self.score'?
+# expect-stderr: the C++ compiler rejected this line
+class Player:
+    def __init__(self, name: str):
+        self.name: str = name
+        self.score: int = 0
+
+    def bump(self) -> void:
+        self.scor += 1
+
+def main() -> int:
+    p: Player = Player("a")
+    p.bump()
+    return 0

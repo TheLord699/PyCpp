@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-stderr: expected ':'
+def main() -> int
+    return 0

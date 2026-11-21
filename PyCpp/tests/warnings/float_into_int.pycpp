@@ -1,0 +1,7 @@
+# expect-exit: 0
+# expect-stderr: this value is a float but 'x' is int
+# expect-stdout: 3
+def main() -> int:
+    x: int = 7 / 2
+    print(x)
+    return 0

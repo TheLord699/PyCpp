@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: inconsistent indentation
+def main() -> int:
+    x: int = 1
+  y: int = 2
+    return 0

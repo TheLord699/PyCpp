@@ -1,0 +1,8 @@
+# expect-exit: nonzero
+# timeout: 120
+def forever(n: int) -> int:
+    return forever(n + 1) + 1
+
+def main() -> int:
+    print(forever(0))
+    return 0

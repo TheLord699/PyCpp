@@ -319,6 +319,22 @@ void generateMultiFileOutput(const std::vector<std::string>& files, const std::s
         modules.emplace_back(file, std::move(ast));
     }
 
+    // [fix2] the entry file must define main()
+    if (!modules.empty()) {
+        bool has_main = false;
+        for (auto& s : modules.front().second->statements)
+            if (auto f = dynamic_cast<FunctionDef*>(s.get()))
+                if (f->name == "main") has_main = true;
+        if (!has_main) {
+            pycpp::Diagnostic d;
+            d.message = "the entry file has no 'main' function";
+            d.file = modules.front().first;
+            d.hint = "add `def main() -> int:` to the file you pass to pycpp";
+            d.notes.push_back("without it the C++ linker fails with 'undefined reference to main'");
+            throw pycpp::CompileError(d);
+        }
+    }
+
     // Point every import at the header (and namespace) its target file generates, and
     // find the imports that are part of an import cycle
     std::map<std::string, std::vector<std::string>> graph;   // file -> files it imports
@@ -354,6 +370,7 @@ void generateMultiFileOutput(const std::vector<std::string>& files, const std::s
     }
 
     for (auto& [file, ast] : modules) {
+        pycpp::source().name = file;   // [fix2] #line directives name this module
         IncludeManager include_manager;
         generateHeaderAndImplementation(ast,
             (std::filesystem::path(tempDir) / stems.at(file)).string(), include_manager);
@@ -434,6 +451,46 @@ static void explainBuildFailure(const std::vector<std::string>& log, const std::
             break;
         }
     }
+    if (d.message.empty()) {   // [fix2] #line directives make g++/cl report positions in the .pycpp file
+        for (const auto& line : log) {
+            if (line.find("error") == std::string::npos) continue;
+            std::string path, msg;
+            int ln = 0;
+            size_t p = line.find(".pycpp:");
+            if (p != std::string::npos) {
+                path = line.substr(0, p + 6);
+                try { ln = std::stoi(line.substr(p + 7)); } catch (...) { continue; }
+                const size_t e = line.find("error:", p);
+                if (e == std::string::npos) continue;
+                msg = line.substr(e + 6);
+            }
+            else if ((p = line.find(".pycpp(")) != std::string::npos) {
+                path = line.substr(0, p + 6);
+                try { ln = std::stoi(line.substr(p + 7)); } catch (...) { continue; }
+                const size_t e = line.find(": error ", p);
+                if (e == std::string::npos) continue;
+                msg = line.substr(e + 8);
+            }
+            else continue;
+            while (!msg.empty() && msg.front() == ' ') msg.erase(0, 1);
+            std::ifstream in(path, std::ios::binary);
+            if (!in) continue;
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            pycpp::setSource(path, text);
+            const auto& sl = pycpp::source().lines;
+            if (ln < 1 || ln > static_cast<int>(sl.size())) continue;
+            const std::string& src_line = sl[ln - 1];
+            const size_t first = src_line.find_first_not_of(" \t");
+            if (first == std::string::npos) continue;
+            d.message = "the C++ compiler rejected this line: " + msg;
+            d.line = ln;
+            d.column = static_cast<int>(first) + 1;
+            d.length = static_cast<int>(src_line.find_last_not_of(" \t") - first + 1);
+            d.hint = "PyCPP could not detect this itself. If the PyCPP code is correct this is a PyCPP bug; "
+                     "re-run with --verbose for the full C++ output";
+            break;
+        }
+    }
     if (d.message.empty()) {
         d.message = "the generated C++ failed to compile";
         d.hint = "this is a PyCPP bug or an unsupported construct. Re-run with --verbose to see the "
@@ -478,7 +535,11 @@ bool buildAndRun(CompilerKind compiler, const std::vector<std::string>& cppFiles
         log.push_back(line);
         if (verbose && !line.empty()) TerminalFormatter::printCompilerOutput(line + "\n");
     });
-    cleanupStrayObjectFiles(verbose);
+    // [fix2] only remove the object files of the modules we just compiled (MSVC drops them in the cwd)
+    for (const auto& file : cppFiles) {
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::path(file).stem().string() + ".obj", ec);
+    }
 
     if (!built) {
         if (!verbose) explainBuildFailure(log, includeDir);   // never dump raw C++ errors
@@ -883,6 +944,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (noCompile) pycpp::lineDirectives() = false;   // [fix2] keep --no-compile output free of #line
     const CompilerKind compiler = CompilerBackend::resolve(requestedCompiler);
     if (verbose) {
         TerminalFormatter::printInfo("Compiler: " + CompilerBackend::displayName(compiler));

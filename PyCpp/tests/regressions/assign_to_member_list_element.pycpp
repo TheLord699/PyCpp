@@ -1,0 +1,14 @@
+# expect-exit: 0
+# expect-stdout: 9
+class Grid:
+    def __init__(self):
+        self.items: list[int] = [1, 2, 3]
+
+    def set_first(self, v: int) -> void:
+        self.items[0] = v
+
+def main() -> int:
+    g: Grid = Grid()
+    g.set_first(9)
+    print(g.items[0])
+    return 0

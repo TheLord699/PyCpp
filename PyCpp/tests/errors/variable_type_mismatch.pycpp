@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: mismatched types: 'x' is int, but the value is str
+def main() -> int:
+    x: int = "hello"
+    return 0

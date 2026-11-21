@@ -1,0 +1,8 @@
+# expect-exit: 0
+# expect-stderr: unused variable 'tmp'
+# expect-stderr: rename it to '_tmp'
+# expect-stdout: ok
+def main() -> int:
+    tmp: int = 5
+    print("ok")
+    return 0

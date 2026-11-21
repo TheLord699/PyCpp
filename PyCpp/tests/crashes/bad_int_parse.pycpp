@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: ValueError: invalid literal for int(): 'abc'
+def main() -> int:
+    n: int = int("abc")
+    print(n)
+    return 0

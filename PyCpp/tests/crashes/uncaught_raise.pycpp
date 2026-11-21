@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stdout: before
+# expect-stderr: ValueError: boom
+def main() -> int:
+    print("before")
+    raise ValueError("boom")

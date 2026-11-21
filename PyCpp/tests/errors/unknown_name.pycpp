@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: cannot find 'scor' in this scope
+# expect-stderr: did you mean 'score'?
+def main() -> int:
+    score: int = 10
+    print(scor)
+    return 0

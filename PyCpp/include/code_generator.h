@@ -16,6 +16,7 @@ namespace pycpp {
 void registerClasses(Program* program);
 bool isInheritedMember(const std::string& class_name, const std::string& member);
 bool hasSubclasses(const std::string& class_name);
+bool& lineDirectives();   // [fix2] emit #line so C++ errors point at the .pycpp source
 // [fix.py] declared type of a member (searches base classes); nullptr when unknown
 Type* memberType(const std::string& class_name, const std::string& member);
 }

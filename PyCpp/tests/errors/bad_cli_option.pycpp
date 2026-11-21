@@ -1,0 +1,6 @@
+# expect-exit: 1
+# args: --verbos
+# expect-stderr: unknown option '--verbos'
+# expect-stderr: did you mean '--verbose'?
+def main() -> int:
+    return 0

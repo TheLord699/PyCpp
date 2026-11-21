@@ -78,6 +78,12 @@ static std::string syntaxHint(const std::string& m) {
         return "a name must follow the keyword";
     if (has("out of range"))
         return "use a smaller literal, or a float";
+    if (has("not supported yet"))
+        return "this Python feature is not implemented in PyCPP; see the README for the supported syntax";
+    if (has("chained comparisons"))
+        return "write each comparison separately: `a < b and b < c`";
+    if (has("invalid assignment target"))
+        return "only a variable, a member (a.b), an element (a[i]) or a dereference (*p) can be assigned to";
     if (has("unexpected character"))
         return "this character is not part of PyCPP syntax";
     return "";
@@ -291,8 +297,8 @@ bool PyCppParser::isValidAssignmentTarget(Expr* expr) {
 
     // Allow array subscript (arr[index])
     if (auto call = dynamic_cast<CallExpr*>(expr)) {
-        if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
-            return true; // Assume it's array access
+        if (call->is_subscript) {
+            return true; // a[i], obj.items[i], a[i][j]   [fix2]
         }
     }
 
@@ -1884,14 +1890,19 @@ std::unique_ptr<Expr> PyCppParser::parseComparisonWithIs() {
 }
 
 std::unique_ptr<Expr> PyCppParser::parseComparison() {
-    auto expr = parseTerm();
+    auto expr = parseBitOr();
 
+    int comparisons = 0;   // [fix2]
     while (true) {
+        if (comparisons++ == 1 && (check(TokenType::LESS) || check(TokenType::GREATER) ||
+            check(TokenType::LESS_EQUAL) || check(TokenType::GREATER_EQUAL) ||
+            check(TokenType::DOUBLE_EQUAL) || check(TokenType::NOT_EQUAL)))
+            throw std::runtime_error("chained comparisons such as a < b < c are not supported");
         if (match(TokenType::LESS)) {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "<";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1900,7 +1911,7 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = ">";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1909,7 +1920,7 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "<=";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1918,7 +1929,7 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = ">=";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1927,7 +1938,7 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "==";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1936,7 +1947,7 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
             auto op = std::make_unique<BinaryOp>();
             op->left = std::move(expr);
             op->op = "!=";
-            op->right = parseTerm();
+            op->right = parseBitOr();
             op->line = tokens[position - 1].line;
             op->column = tokens[position - 1].column;
             expr = std::move(op);
@@ -1946,6 +1957,67 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
         }
     }
 
+    return expr;
+}
+
+// [fix2] bitwise operators, loosest to tightest:  |  ^  &  << >>   (all bind tighter than comparisons)
+std::unique_ptr<Expr> PyCppParser::parseBitOr() {
+    auto expr = parseBitXor();
+    while (check(TokenType::BITWISE_OR)) {
+        advance();
+        auto op = std::make_unique<BinaryOp>();
+        op->left = std::move(expr);
+        op->op = "|";
+        op->right = parseBitXor();
+        op->line = tokens[position - 1].line;
+        op->column = tokens[position - 1].column;
+        expr = std::move(op);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> PyCppParser::parseBitXor() {
+    auto expr = parseBitAnd();
+    while (check(TokenType::BITWISE_XOR)) {
+        advance();
+        auto op = std::make_unique<BinaryOp>();
+        op->left = std::move(expr);
+        op->op = "^";
+        op->right = parseBitAnd();
+        op->line = tokens[position - 1].line;
+        op->column = tokens[position - 1].column;
+        expr = std::move(op);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> PyCppParser::parseBitAnd() {
+    auto expr = parseShift();
+    while (check(TokenType::BITWISE_AND)) {
+        advance();
+        auto op = std::make_unique<BinaryOp>();
+        op->left = std::move(expr);
+        op->op = "&";
+        op->right = parseShift();
+        op->line = tokens[position - 1].line;
+        op->column = tokens[position - 1].column;
+        expr = std::move(op);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> PyCppParser::parseShift() {
+    auto expr = parseTerm();
+    while (check(TokenType::LEFT_SHIFT) || check(TokenType::RIGHT_SHIFT)) {
+        const std::string symbol = advance().value;
+        auto op = std::make_unique<BinaryOp>();
+        op->left = std::move(expr);
+        op->op = symbol;
+        op->right = parseTerm();
+        op->line = tokens[position - 1].line;
+        op->column = tokens[position - 1].column;
+        expr = std::move(op);
+    }
     return expr;
 }
 
@@ -2285,6 +2357,13 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                     throw std::runtime_error("unexpected character '" + peek().value + "'");
                 if (peek().type == TokenType::NEWLINE || peek().type == TokenType::DEDENT)
                     throw std::runtime_error("expected an expression, but the line ended");
+                switch (peek().type) {   // [fix2] Python keywords PyCPP does not implement
+                case TokenType::LAMBDA: case TokenType::WITH: case TokenType::ASYNC: case TokenType::AWAIT:
+                case TokenType::YIELD: case TokenType::GLOBAL: case TokenType::NONLOCAL:
+                case TokenType::EXEC: case TokenType::EVAL: case TokenType::COMPILE:
+                    throw std::runtime_error("'" + peek().value + "' is not supported yet by PyCPP");
+                default: break;
+                }
                 throw std::runtime_error("Expected expression, got: '" + peek().value + "'");
             }
         }

@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: unexpected 'dads' after the end of the statement
+# expect-stderr: put each statement on its own line
+def main() -> int:
+    print("hi")dads
+    return 0

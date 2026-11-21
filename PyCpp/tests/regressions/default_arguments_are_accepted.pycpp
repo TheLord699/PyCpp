@@ -1,0 +1,11 @@
+# expect-exit: 0
+# expect-stdout: hey
+# expect-stdout: yo
+def greet(name: str, times: int = 2) -> void:
+    for i in range(times):
+        print(name)
+
+def main() -> int:
+    greet("hey")
+    greet("yo", 1)
+    return 0

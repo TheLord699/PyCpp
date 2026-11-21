@@ -1,5 +1,6 @@
 #include "../include/log.h"
 #include "../include/code_generator.h"
+#include "../include/diagnostics.h"
 #include "../include/header_generator.h"
 #include <iostream>
 #include <sstream>
@@ -88,6 +89,8 @@ bool pycpp::isInheritedMember(const std::string& cls, const std::string& member)
     }
     return false;
 }
+
+bool& pycpp::lineDirectives() { static bool on = true; return on; }   // [fix2]
 
 bool pycpp::hasSubclasses(const std::string& cls) {
     for (auto& entry : classRegistry()) if (entry.second.base == cls) return true;
@@ -809,6 +812,8 @@ void CodeGenerator::generateStatement(Stmt* stmt) {
     }
     // Advance first so that nested statements measure their gap from this one's header
     if (stmt->line > last_statement_line) last_statement_line = stmt->line;
+    if (pycpp::lineDirectives() && stmt->line > 0 && !pycpp::source().name.empty())   // [fix2]
+        output << "#line " << stmt->line << " \"" << cppEscape(pycpp::source().name) << "\"\n";
     stmt->accept(*this);
 }
 
@@ -1328,6 +1333,16 @@ void CodeGenerator::generateExpression(Expr* expr) {
     // Handle CallExpr first - using the COMPREHENSIVE approach
     if (auto call_expr = dynamic_cast<CallExpr*>(expr)) {
         // a[i] is indexing, not a call
+        if (call_expr->is_subscript && call_expr->arguments.size() == 1) {
+            // [fix2] bounds-checked, Python-style indexing: a[-1] works, a[99] raises IndexError
+            useRuntime();
+            output << "pycpp::at(";
+            generateObjectOperand(call_expr->callee.get());
+            output << ", ";
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            return;
+        }
         if (call_expr->is_subscript) {
             generateObjectOperand(call_expr->callee.get());   // [fix.py]
             output << "[";

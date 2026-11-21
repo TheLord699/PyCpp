@@ -1,0 +1,15 @@
+# expect-exit: 0
+# expect-stdout: 8
+# expect-stdout: 1024
+# expect-stdout: 7
+# expect-stdout: True
+def main() -> int:
+    print(12 & 10)
+    print(1 << 10)
+    print(5 | 2)
+    print(5 ^ 1)
+    print(1 | 2 & 3)
+    print(64 >> 3)
+    flag: bool = 4 & 1 == 0
+    print(flag)
+    return 0

@@ -879,3 +879,25 @@ Write less boilerplate. Keep complete control. Get native performance.
 **The simplicity of Python. The power of C++.**
 
 *Note: PyCPP is an AI-designed language project.
+
+## Diagnostics and tests
+
+PyCPP reports problems in a compact, Rust-like format: an error code frame with the source line, a caret under the
+offending token, a label, notes and a `help:` line. One run reports as many independent errors as it can, followed by a
+summary (`could not compile due to 2 errors; 1 warning emitted`). Set `NO_COLOR=1` to disable colours.
+
+Compile-time checks include: unknown names and types (with "did you mean"), wrong argument counts and types in calls to
+your own functions, statements outside functions, a missing `main`, unused variables, unreachable code, and float values
+stored in integer variables. The generated C++ carries `#line` directives, so if the C++ compiler still rejects
+something, the error is shown against the PyCPP line that produced it.
+
+`list[i]` is bounds-checked: negative indices count from the end and an out-of-range index raises `IndexError`.
+
+Regression tests live in `PyCpp/tests/` (`errors`, `warnings`, `crashes`, `regressions`). Each case declares what it
+expects in leading comments (`# expect-exit: 1`, `# expect-stderr: ...`). Run them with:
+
+```
+python PyCpp/tests/run_tests.py                  # everything
+python PyCpp/tests/run_tests.py errors crashes   # some folders
+python PyCpp/tests/run_tests.py -k unused -v     # filter by name, show output
+```

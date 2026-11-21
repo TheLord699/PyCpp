@@ -1,0 +1,5 @@
+# expect-exit: nonzero
+# expect-stderr: ssertion
+def main() -> int:
+    assert 1 > 2, "math is broken"
+    return 0

@@ -1,0 +1,17 @@
+# expect-exit: 0
+# expect-stdout: woof
+class Animal:
+    def sound(self) -> str:
+        return "..."
+
+class Dog(Animal):
+    def sound(self) -> str:
+        return "woof"
+
+def speak(a: &Animal) -> void:
+    print(a.sound())
+
+def main() -> int:
+    d: Dog = Dog()
+    speak(d)
+    return 0

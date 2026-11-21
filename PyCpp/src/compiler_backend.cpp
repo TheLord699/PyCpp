@@ -25,8 +25,22 @@ namespace {
 const char* const kCppStandard = "20";
 
 // Visual Studio environment script used when cl.exe is not already on PATH.
-const char* const kVcVarsPath =
-    "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat";
+// [fix2] Visual Studio environment script: PYCPP_VCVARS overrides it, otherwise the usual install paths are searched.
+std::string vcVarsPath() {
+    if (const char* custom = std::getenv("PYCPP_VCVARS")) return custom;
+    const char* roots[] = { "C:\\Program Files\\Microsoft Visual Studio", "C:\\Program Files (x86)\\Microsoft Visual Studio" };
+    const char* years[] = { "2022", "2019", "2017" };
+    const char* editions[] = { "Community", "Professional", "Enterprise", "BuildTools" };
+    for (const char* root : roots)
+        for (const char* year : years)
+            for (const char* edition : editions) {
+                const std::string candidate = std::string(root) + "\\" + year + "\\" + edition +
+                                              "\\VC\\Auxiliary\\Build\\vcvars64.bat";
+                std::error_code ec;
+                if (std::filesystem::exists(candidate, ec)) return candidate;
+            }
+    return std::string(roots[0]) + "\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat";
+}
 
 std::string toLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -171,7 +185,7 @@ std::string CompilerBackend::buildMsvcBatch(const CompileRequest& request) {
         "@echo off\r\n"
         "where cl >nul 2>&1\r\n"
         "if %errorlevel% equ 0 goto compile\r\n"
-        "call \"" + std::string(kVcVarsPath) + "\" >nul 2>&1\r\n"
+        "call \"" + vcVarsPath() + "\" >nul 2>&1\r\n"
         "if %errorlevel% neq 0 (\r\n"
         "  echo Failed to set up the Visual Studio environment\r\n"
         "  exit /b 1\r\n"
@@ -192,7 +206,7 @@ bool CompilerBackend::isAvailable(CompilerKind kind, std::string& reason) {
     case CompilerKind::Msvc:
 #ifdef _WIN32
         if (quietCommandSucceeds("where cl")) return true;
-        if (std::filesystem::exists(kVcVarsPath)) return true;
+        if (std::filesystem::exists(vcVarsPath())) return true;
         reason = "Visual Studio 2022 (cl.exe) was not found. Run from a Developer Command "
                  "Prompt, install Visual Studio 2022 Community, or choose --compiler gcc.";
         return false;

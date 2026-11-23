@@ -388,8 +388,8 @@ void printUsage(const std::string& programName) {
     std::cout << "  -b, --build      Build an optimized executable next to the source, don't run it\n";
     std::cout << "  --no-compile     Only generate .h and .cpp files, don't compile\n";
     std::cout << "  --single-file    Compile only the specified file (no auto-deps)\n";
-    std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, msvc or auto\n";
-    std::cout << "                   (default: auto = msvc on Windows, gcc elsewhere)\n";
+    std::cout << "  --compiler <c>   C++ compiler for the generated code: gcc, clang, msvc or auto\n";
+    std::cout << "                   (default: auto = msvc on Windows, clang on macOS, gcc elsewhere)\n";
     std::cout << "  --linker-flags <flags>  Extra flags passed to the linker (e.g. \"-lraylib -lopengl32\")\n"; // --- ADDED ---
     std::cout << "  -I <path>        Add directory to import search path\n\n";
     std::cout << "Examples:\n";
@@ -400,6 +400,7 @@ void printUsage(const std::string& programName) {
     std::cout << "  " << programName << " program.pycpp --no-compile            # Generate C++ only\n";
     std::cout << "  " << programName << " program.pycpp --single-file           # Compile only one file\n";
     std::cout << "  " << programName << " program.pycpp -I ./lib               # With custom import path\n";
+    std::cout << "  " << programName << " program.pycpp --compiler clang        # Build with clang++\n";
     std::cout << "  " << programName << " program.pycpp --compiler gcc          # Build with g++\n";
     std::cout << "  " << programName << " program.pycpp --compiler msvc         # Build with Visual Studio (cl.exe)\n";
     std::cout << "  " << programName << " game.pycpp --linker-flags \"-lraylib -lopengl32 -lgdi32 -lwinmm\"  # Link external libraries\n"; // --- ADDED ---

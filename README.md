@@ -20,11 +20,13 @@ Before building PyCPP, make sure you have the following installed:
 
 - **Git** — to clone the repository.
 - **CMake** — to configure and build the project.
-- **C++ compiler** — GCC (g++) or Microsoft Visual C++ (MSVC).
+- **C++ compiler** — GCC (g++), Clang (clang++), or Microsoft Visual C++ (MSVC).
 
 Make sure your chosen C++ compiler and CMake are accessible through your system PATH.
 
 For Windows GCC builds, you need a working MinGW-w64 installation.
+
+On macOS, install Apple Command Line Tools with `xcode-select --install` to get Clang and the macOS SDK. Install CMake separately (for example, `brew install cmake`).
 
 ## 2. Download PyCPP
 
@@ -53,11 +55,25 @@ cmake --preset x64-release
 cmake --build --preset x64-release
 ```
 
+**macOS (Clang):**
+
+```bash
+cmake --preset macos-release
+cmake --build --preset macos-release
+```
+
 **Linux (GCC):**
 
 ```bash
 cmake --preset linux-gcc-release
 cmake --build --preset linux-gcc-release
+```
+
+**macOS (Clang):**
+
+```bash
+cmake --preset macos-release
+cmake --build --preset macos-release
 ```
 
 These commands configure and build the PyCPP compiler itself in Release mode.
@@ -79,6 +95,12 @@ def main() -> int:
 PyCPP uses Python-inspired syntax, but unlike Python, all variables and function signatures are statically typed.
 
 ## 5. Compile and run
+
+**Using Clang:**
+
+```bash
+pycpp hello.pycpp --compiler clang
+```
 
 **Using GCC:**
 
@@ -114,11 +136,12 @@ You can explicitly choose which C++ compiler PyCPP uses:
 
 | Argument          | Compiler                     |
 | ----------------- | ---------------------------- |
+| `--compiler clang` | Clang / clang++                   |
 | `--compiler gcc`  | GCC / g++                    |
 | `--compiler msvc` | Microsoft Visual C++         |
 | No argument       | Automatic platform selection |
 
-On Windows, automatic selection defaults to MSVC. On Linux and macOS, it defaults to GCC.
+Automatic selection defaults to MSVC on Windows, Clang on macOS, and GCC on Linux.
 
 If the selected compiler cannot be found, PyCPP reports an error rather than silently switching to another compiler.
 

@@ -12,7 +12,7 @@ The goal is simple: **Everything C++ can do, PyCPP should be able to do — with
 
 Get started with PyCPP in a few minutes.
 
-PyCPP translates `.pycpp` source files into modern C++ and then compiles them into native executables using GCC or MSVC.
+PyCPP translates `.pycpp` source files into modern C++ and then compiles them into native executables using GCC, Clang or MSVC.
 
 ## 1. Prerequisites
 

@@ -771,23 +771,25 @@ Performance should be comparable to equivalent C++ code when the generated code 
 
 ### **15.1 Choosing the C++ compiler**
 
-The generated C++ can be built with GCC or MSVC. Select one with `--compiler`:
+The generated C++ can be built with GCC, Clang or MSVC. Select one with `--compiler`:
 
 ```
-pycpp main.pycpp --compiler gcc      # g++
+pycpp main.pycpp --compiler gcc      # GCC (g++)
+pycpp main.pycpp --compiler clang    # Clang (clang++)
 pycpp main.pycpp --compiler msvc     # Visual Studio (cl.exe), Windows only
-pycpp main.pycpp                     # auto: msvc on Windows, gcc elsewhere
+pycpp main.pycpp                     # auto: msvc on Windows, clang on macOS, gcc on Linux
 ```
 
-| Value          | Compiler          | Notes                                                        |
-| -------------- | ----------------- | ------------------------------------------------------------ |
-| `gcc` / `g++`  | GCC (MinGW on Windows) | `g++` must be on `PATH`.                                |
-| `msvc` / `cl`  | Visual Studio 2022 | Uses `cl.exe` from `PATH`, otherwise loads `vcvars64.bat`. |
-| `auto`         | Platform default  | `msvc` on Windows, `gcc` on Linux and macOS.                 |
+| Value | Compiler | Notes |
+|---|---|---|
+| `gcc` / `g++` | GCC (MinGW on Windows) | `g++` must be on `PATH`. |
+| `clang` / `clang++` | Clang | `clang++` must be on `PATH`. |
+| `msvc` / `cl` | Microsoft Visual C++ (Visual Studio 2022) | Uses `cl.exe` from `PATH`, otherwise loads `vcvars64.bat`. |
+| `auto` | Platform default | `msvc` on Windows, `clang` on macOS, `gcc` on Linux. |
 
-`--compiler=gcc` is accepted as well. If the chosen compiler is not available, PyCPP stops with a clear message instead of falling back to a different one.
+`--compiler=gcc`, `--compiler=clang` and `--compiler=msvc` are also accepted. If the chosen compiler is not available, PyCPP stops with a clear message instead of falling back to a different one.
 
-To build the PyCPP compiler itself with either toolchain, use the CMake presets: `linux-gcc-release`, `windows-gcc-release` (MinGW) or `x64-release` (MSVC).
+To build the PyCPP compiler itself, use the CMake presets: `linux-gcc-release` (GCC), `windows-gcc-release` (MinGW) or `x64-release` (MSVC). The `macos-release` preset builds with Apple Clang.
 
 ### **15.2 Output and diagnostics**
 

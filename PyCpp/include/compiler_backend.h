@@ -9,7 +9,8 @@
 enum class CompilerKind {
     Auto, // pick a sensible default for the current platform
     Gcc,  // g++ (GCC, or MinGW on Windows)
-    Msvc  // cl.exe from Visual Studio (Windows only)
+    Msvc, // cl.exe from Visual Studio (Windows only)
+    Clang // clang++ (macOS and other supported platforms)
 };
 
 // Everything a backend needs to turn generated .cpp files into an executable.
@@ -23,11 +24,11 @@ struct CompileRequest {
 
 class CompilerBackend {
 public:
-    // Accepts "gcc", "g++", "msvc", "cl" or "auto" (case-insensitive).
+    // Accepts "gcc", "g++", "clang", "clang++", "msvc", "cl" or "auto" (case-insensitive).
     // Returns false and leaves `out` untouched for anything else.
     static bool parseKind(const std::string& name, CompilerKind& out);
 
-    // Auto -> MSVC on Windows (the historical default), gcc everywhere else.
+    // Auto -> MSVC on Windows, Clang on macOS, GCC elsewhere.
     static CompilerKind resolve(CompilerKind requested);
 
     static std::string displayName(CompilerKind kind);

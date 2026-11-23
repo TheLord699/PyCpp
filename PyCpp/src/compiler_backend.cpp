@@ -117,6 +117,7 @@ bool quietCommandSucceeds(const std::string& command) {
 bool CompilerBackend::parseKind(const std::string& name, CompilerKind& out) {
     const std::string n = toLower(name);
     if (n == "auto") { out = CompilerKind::Auto; return true; }
+    if (n == "clang" || n == "clang++") { out = CompilerKind::Clang; return true; }
     if (n == "gcc" || n == "g++") { out = CompilerKind::Gcc; return true; }
     if (n == "msvc" || n == "cl") { out = CompilerKind::Msvc; return true; }
     return false;
@@ -126,6 +127,8 @@ CompilerKind CompilerBackend::resolve(CompilerKind requested) {
     if (requested != CompilerKind::Auto) return requested;
 #ifdef _WIN32
     return CompilerKind::Msvc;
+#elif defined(__APPLE__)
+    return CompilerKind::Clang;
 #else
     return CompilerKind::Gcc;
 #endif
@@ -133,6 +136,7 @@ CompilerKind CompilerBackend::resolve(CompilerKind requested) {
 
 std::string CompilerBackend::displayName(CompilerKind kind) {
     switch (resolve(kind)) {
+    case CompilerKind::Clang: return "Clang (clang++)";
     case CompilerKind::Gcc:  return "gcc (g++)";
     case CompilerKind::Msvc: return "MSVC (cl.exe)";
     default:                 return "auto";
@@ -163,7 +167,7 @@ std::string CompilerBackend::buildCompileCommand(CompilerKind kind, const Compil
         command += " /nologo";
     }
     else {
-        command = std::string("g++ -std=c++") + kCppStandard;
+        command = std::string(resolve(kind) == CompilerKind::Clang ? "clang++ -std=c++" : "g++ -std=c++") + kCppStandard;
         for (const auto& file : request.cppFiles) {
             command += " " + quoteArg(file);
         }
@@ -197,6 +201,11 @@ std::string CompilerBackend::buildMsvcBatch(const CompileRequest& request) {
 
 bool CompilerBackend::isAvailable(CompilerKind kind, std::string& reason) {
     switch (resolve(kind)) {
+    case CompilerKind::Clang:
+        if (quietCommandSucceeds("clang++ --version")) return true;
+        reason = "clang++ was not found on PATH. On macOS, install Apple Command Line Tools with xcode-select --install.";
+        return false;
+
     case CompilerKind::Gcc:
         if (quietCommandSucceeds("g++ --version")) return true;
         reason = "g++ was not found on PATH. Install GCC (on Windows, MinGW-w64 or MSYS2) "
@@ -211,7 +220,7 @@ bool CompilerBackend::isAvailable(CompilerKind kind, std::string& reason) {
                  "Prompt, install Visual Studio 2022 Community, or choose --compiler gcc.";
         return false;
 #else
-        reason = "MSVC (cl.exe) is only available on Windows. Use --compiler gcc.";
+        reason = "MSVC (cl.exe) is only available on Windows. Use --compiler clang or --compiler gcc.";
         return false;
 #endif
 

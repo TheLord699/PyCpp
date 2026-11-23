@@ -55,13 +55,6 @@ cmake --preset x64-release
 cmake --build --preset x64-release
 ```
 
-**macOS (Clang):**
-
-```bash
-cmake --preset macos-release
-cmake --build --preset macos-release
-```
-
 **Linux (GCC):**
 
 ```bash

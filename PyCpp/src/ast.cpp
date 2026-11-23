@@ -180,3 +180,15 @@ void RaiseStmt::accept(ASTVisitor& visitor) {
 void DeferStmt::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }
+
+void Comprehension::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+void FString::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+void Lambda::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}

@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-no-stderr: ^^^^^^^^^^^^^^^
+# expect-stderr: error[E0002]: unterminated string literal
+# expect-stderr: ^^^^^^^^^^^^^^ this string is never closed
+def main() -> int:
+    print("oops, no end)
+    return 0

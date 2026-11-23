@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: error[E0104]: mismatched types: expected int, found str
+def main() -> int:
+    count = 1
+    count = "many"
+    print(count)
+    return 0

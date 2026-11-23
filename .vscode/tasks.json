@@ -1,0 +1,117 @@
+// PyCPP tasks: Terminal > Run Task, or Ctrl+Shift+B for "pycpp: check current file".
+// Errors and warnings are underlined in the editor and listed in the Problems panel.
+// They use `--error-format=short` (file:line:column: error[E0101]: message), which the
+// problem matcher below reads. `pycpp` must be on PATH (see README, "Quick Start").
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "pycpp: check current file",
+            "type": "process",
+            "command": "pycpp",
+            "args": [
+                "check",
+                "${file}",
+                "--error-format=short"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "presentation": {
+                "reveal": "silent",
+                "clear": true
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": {
+                "owner": "pycpp",
+                "source": "pycpp",
+                "fileLocation": [
+                    "autoDetect",
+                    "${fileDirname}"
+                ],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+):(\\d+): (error|warning|note)(?:\\[(\\w+)\\])?: (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "code": 5,
+                    "message": 6
+                }
+            }
+        },
+        {
+            "label": "pycpp: watch current file",
+            "detail": "Re-checks on every save; problems update in place",
+            "type": "process",
+            "command": "pycpp",
+            "args": [
+                "check",
+                "${file}",
+                "--watch",
+                "--error-format=short"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "isBackground": true,
+            "presentation": {
+                "reveal": "silent"
+            },
+            "problemMatcher": {
+                "owner": "pycpp",
+                "source": "pycpp",
+                "fileLocation": [
+                    "autoDetect",
+                    "${fileDirname}"
+                ],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+):(\\d+): (error|warning|note)(?:\\[(\\w+)\\])?: (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "code": 5,
+                    "message": 6
+                },
+                "background": {
+                    "activeBegins": true,
+                    "beginsPattern": "^\\[watch\\] change detected",
+                    "endsPattern": "^\\[watch\\] waiting for changes"
+                }
+            }
+        },
+        {
+            "label": "pycpp: run current file",
+            "type": "process",
+            "command": "pycpp",
+            "args": [
+                "${file}",
+                "--error-format=short"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": {
+                "owner": "pycpp",
+                "source": "pycpp",
+                "fileLocation": [
+                    "autoDetect",
+                    "${fileDirname}"
+                ],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+):(\\d+): (error|warning|note)(?:\\[(\\w+)\\])?: (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "code": 5,
+                    "message": 6
+                }
+            }
+        }
+    ]
+}

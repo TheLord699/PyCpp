@@ -52,6 +52,9 @@ Token Lexer::readNumber() {
         number += advance();
         while (std::isxdigit(static_cast<unsigned char>(peek()))) number += advance();
         if (number.size() <= 2) return Token(TokenType::UNKNOWN, number, start_line, start_column);
+        // More than 16 hex digits cannot fit; the parser reports values above INT64_MAX
+        const size_t digits = number.find_first_not_of('0', 2) == std::string::npos ? 0 : number.size() - number.find_first_not_of('0', 2);
+        if (digits > 16) return Token(TokenType::UNKNOWN, "integer literal '" + number + "' is too large for 64 bits", start_line, start_column);
         return Token(TokenType::NUMBER, std::to_string(std::stoull(number, nullptr, 16)), start_line, start_column);
     }
     if (number == "0" && (peek() == 'b' || peek() == 'B') && position + 1 < source.length() &&
@@ -59,6 +62,9 @@ Token Lexer::readNumber() {
         advance();
         std::string bits;
         while (peek() == '0' || peek() == '1') bits += advance();
+        const size_t first_one = bits.find('1');
+        if (first_one != std::string::npos && bits.size() - first_one > 64)
+            return Token(TokenType::UNKNOWN, "integer literal '0b" + bits + "' is too large for 64 bits", start_line, start_column);
         return Token(TokenType::NUMBER, std::to_string(std::stoull(bits, nullptr, 2)), start_line, start_column);
     }
 
@@ -118,6 +124,29 @@ Token Lexer::readString() {
     }
 
     return Token(TokenType::STRING_LITERAL, str, start_line, start_column);
+}
+
+// f"text {expr:spec} text": the raw text between the quotes is kept as it is written
+// (escapes included). The parser splits it into literal parts and expressions, so that
+// positions inside the f-string can be mapped back to the source.
+Token Lexer::readFString() {
+    const int start_line = line;
+    const int start_column = column;
+    advance();                    // 'f' or 'F'
+    const char quote = advance(); // opening quote
+    std::string raw;
+    while (peek() != quote && peek() != '\0' && peek() != '\n') {
+        if (peek() == '\\') {
+            raw += advance();
+            if (peek() != '\0' && peek() != '\n') raw += advance();
+            continue;
+        }
+        raw += advance();
+    }
+    if (peek() != quote)
+        return Token(TokenType::UNKNOWN, "unterminated string literal", start_line, start_column);
+    advance();                    // closing quote
+    return Token(TokenType::FSTRING, raw, start_line, start_column);
 }
 
 Token Lexer::readIdentifier() {
@@ -620,8 +649,13 @@ std::vector<Token> Lexer::tokenize() {
         char c = peek();
         if (c == '\0') break;
 
+        const size_t count_before = tokens.size();
         if (std::isdigit(static_cast<unsigned char>(c))) {
             tokens.push_back(readNumber());
+        }
+        else if ((c == 'f' || c == 'F') && position + 1 < source.length() &&
+                 (source[position + 1] == '"' || source[position + 1] == '\'')) {
+            tokens.push_back(readFString());
         }
         else if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             tokens.push_back(readIdentifier());
@@ -658,6 +692,11 @@ std::vector<Token> Lexer::tokenize() {
         else {
             tokens.emplace_back(TokenType::UNKNOWN, std::string(1, c), line, column);
             advance();
+        }
+        // The token just read ends where the lexer stands now
+        if (tokens.size() == count_before + 1 && tokens.back().type != TokenType::NEWLINE) {
+            tokens.back().end_line = line;
+            tokens.back().end_column = column;
         }
     }
 

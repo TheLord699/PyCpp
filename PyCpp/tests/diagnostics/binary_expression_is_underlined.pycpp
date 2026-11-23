@@ -1,0 +1,8 @@
+# expect-exit: 0
+# expect-stderr: warning[W0005]: mismatched types in '+': str and int
+# expect-stderr: |              ^^^^^^^^^^^
+# expect-no-stderr: ^^^^^^^^^^^^
+def main() -> int:
+    s: str = "hello" + 5
+    print(s)
+    return 0

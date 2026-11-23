@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: error[E0010]: integer literal '99999999999999999999' is out of range
+def main() -> int:
+    x: i64 = 99999999999999999999
+    return 0

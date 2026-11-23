@@ -1,4 +1,5 @@
 #include <cctype>
+#include <limits>
 #include "../include/pycpp_parser.h"
 #include <iostream>
 #include <stdexcept>
@@ -49,6 +50,11 @@ static bool isWordToken(const Token& token) {
         (std::isalpha(static_cast<unsigned char>(token.value[0])) || token.value[0] == '_');
 }
 
+// A parser message can carry its own help text after a '\x1f' separator.
+static std::string withHint(const std::string& message, const std::string& hint) {
+    return message + '\x1f' + hint;
+}
+
 // [diag-fix] help text for the most common syntax errors
 static std::string syntaxHint(const std::string& m) {
     auto has = [&](const char* s) { return m.find(s) != std::string::npos; };
@@ -89,10 +95,33 @@ static std::string syntaxHint(const std::string& m) {
     return "";
 }
 
+// Stable code (error_codes.h) of a syntax error, from its message.
+static const char* syntaxCode(const std::string& m) {
+    auto has = [&](const char* s) { return m.find(s) != std::string::npos; };
+    if (has("f-string")) return "E0014";
+    if (has("unexpected character")) return "E0001";
+    if (has("unterminated string")) return "E0002";
+    if (has("expected ':'")) return "E0003";
+    if (has("indented block") || has("indented class body") || has("indented struct body") ||
+        has("indented 'case'") || has("unexpected indentation") || has("inconsistent indentation")) return "E0004";
+    if (has("after the end of the statement")) return "E0005";
+    if (has("expected ')'") || has("expected ']'") || has("expected '}'")) return "E0007";
+    if (has("invalid assignment target")) return "E0008";
+    if (has("chained comparisons")) return "E0009";
+    if (has("out of range") || has("too large for 64 bits")) return "E0010";
+    if (has("not supported")) return "E0011";
+    if (has("type specification")) return "E0012";
+    if (has("expression")) return "E0006";
+    return "E0013";
+}
+
 void PyCppParser::reportError(const std::string& message, int line, int column) {
     // [diag-fix] structured, Rust-style syntax diagnostics
     pycpp::Diagnostic d;
     std::string text = message;
+    std::string own_hint;
+    const size_t sep = text.find('\x1f');               // message carries its own help text
+    if (sep != std::string::npos) { own_hint = text.substr(sep + 1); text.erase(sep); }
     const size_t at = text.find(" at line ");
     if (at != std::string::npos) text.erase(at);               // the frame shows the location
     const size_t eof = text.find(" (reached end of file)");
@@ -109,16 +138,23 @@ void PyCppParser::reportError(const std::string& message, int line, int column) 
     }
     for (const auto& t : tokens) {                               // underline the whole token
         if (t.line != line || t.column != column || t.value.empty() || t.type == TokenType::NEWLINE) continue;
-        if (t.type != TokenType::UNKNOWN)
-            d.length = static_cast<int>(t.value.size()) + (t.type == TokenType::STRING_LITERAL ? 2 : 0);
+        if (t.type != TokenType::UNKNOWN && t.end_line == t.line && t.end_column > t.column)
+            d.length = t.end_column - t.column;
         break;
+    }
+    d.code = syntaxCode(text);
+    if (d.code == "E0002" && line >= 1 && line <= static_cast<int>(src_lines.size())) {
+        // the string runs on to the end of the line
+        const int len = static_cast<int>(src_lines[line - 1].size()) - (column - 1);
+        if (len > 0) d.length = len;
+        d.label = "this string is never closed";
     }
     if (text.find("after the end of the statement") != std::string::npos)
         d.label = "expected a new line before this";
     d.message = text;
     d.line = line;
     d.column = column;
-    d.hint = syntaxHint(text);
+    d.hint = own_hint.empty() ? syntaxHint(text) : own_hint;
     for (const auto& e : errors)
         if (e.line == d.line && e.column == d.column && e.message == d.message) return;
     errors.push_back(std::move(d));
@@ -160,6 +196,14 @@ bool PyCppParser::isMemberAccess() {
 
     position = save_pos;
     return result;
+}
+
+// A variable, parameter or loop-variable name. Names of built-in functions and string
+// methods (title, upper, count, max, ...) are lexed as keywords but may be used as names,
+// as in Python.
+std::string PyCppParser::consumeName(const std::string& error_msg) {
+    if (check(TokenType::IDENTIFIER) || (!atEnd() && isBuiltInFunctionToken(peek().type))) return advance().value;
+    return consume(TokenType::IDENTIFIER, error_msg).value;
 }
 
 bool PyCppParser::isBuiltInFunctionToken(TokenType type) {
@@ -305,19 +349,6 @@ bool PyCppParser::isValidAssignmentTarget(Expr* expr) {
     return false;
 }
 
-std::unique_ptr<Expr> PyCppParser::createAssignment(std::unique_ptr<Expr> left, const std::string& op, std::unique_ptr<Expr> right) {
-    // Check if left side is valid for assignment
-    if (isValidAssignmentTarget(left.get())) {
-        auto assign = std::make_unique<BinaryOp>();
-        assign->left = std::move(left);
-        assign->op = op;
-        assign->right = std::move(right);
-        assign->line = tokens[position - 1].line;
-        assign->column = tokens[position - 1].column;
-        return assign;
-    }
-    throw std::runtime_error("Invalid assignment target");
-}
 
 
 Token PyCppParser::peek() {
@@ -618,7 +649,7 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     // we can't go back and reinterpret them as declarations
 
     // Look for simple variable declaration: identifier : type
-    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::COLON)) {
+    if ((check(TokenType::IDENTIFIER) || isBuiltInFunctionToken(peek().type)) && checkNext(TokenType::COLON)) {
         return parseVarDecl();
     }
 
@@ -630,9 +661,10 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
     // Only if it's not a declaration, try to parse as expression
     if (auto expr = parseExpression()) {
         auto stmt = std::make_unique<ExprStmt>();
+        const SourceSpan where = spanOf(expr.get());
         stmt->expr = std::move(expr);
-        stmt->line = tokens[position].line;
-        stmt->column = tokens[position].column;
+        stmt->line = where.line > 0 ? where.line : tokens[position].line;
+        stmt->column = where.line > 0 ? where.column : tokens[position].column;
 
         expectStatementEnd();
         return stmt;
@@ -667,7 +699,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     // Parse parameters
     if (!check(TokenType::RPAREN)) {
         do {
-            std::string param_name = consume(TokenType::IDENTIFIER, "Expected parameter name").value;
+            std::string param_name = consumeName("Expected parameter name");
             pycpp::debugLog() << "Found parameter: " << param_name << std::endl;
 
             // Handle parameters with type annotations
@@ -1163,7 +1195,7 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
     }
     else {
         // Simple identifier
-        var_decl->var_name = consume(TokenType::IDENTIFIER, "Expected variable name").value;
+        var_decl->var_name = consumeName("Expected variable name");
         pycpp::debugLog() << "Parsing simple variable: " << var_decl->var_name << std::endl;
     }
 
@@ -1244,6 +1276,19 @@ std::unique_ptr<Type> PyCppParser::parseType() {
         consume(TokenType::RBRACKET, "Expected ']' after list element type");
         list_type->name = "std::vector<" + list_type->element_type->name + ">";
         return finish(std::move(list_type));
+    }
+
+    // set[T] -> std::set<T>
+    if (check(TokenType::SET) && checkNext(TokenType::LBRACKET)) {
+        const Token set_token = advance();
+        consume(TokenType::LBRACKET, "Expected '[' after 'set'");
+        auto element = parseType();
+        consume(TokenType::RBRACKET, "Expected ']' after set element type");
+        auto set_type = std::make_unique<BasicType>();
+        set_type->line = set_token.line;
+        set_type->column = set_token.column;
+        set_type->name = "std::set<" + element->name + ">";
+        return finish(std::move(set_type));
     }
 
     // Handle dict types
@@ -1424,7 +1469,7 @@ std::unique_ptr<ForStmt> PyCppParser::parseForStmt() {
 
     // Loop variable
     do {
-        for_stmt->var_names.push_back(consume(TokenType::IDENTIFIER, "Expected loop variable name").value);
+        for_stmt->var_names.push_back(consumeName("Expected loop variable name"));
     } while (match(TokenType::COMMA));
     for_stmt->var_name = for_stmt->var_names.front();
     consume(TokenType::IN, "Expected 'in' after loop variable");
@@ -1694,6 +1739,43 @@ void PyCppParser::synchronizeInBlock() {
 
 // ===== Expression Parsing =====
 
+// ===== Source spans =====
+
+// Span from token `first` up to the last consumed token.
+void PyCppParser::finishSpan(Expr* e, size_t first) {
+    if (!e || first >= tokens.size() || position == 0) return;
+    const Token& a = tokens[first];
+    const Token& b = tokens[std::min(position, tokens.size()) - 1];
+    e->span_line = a.line;
+    e->span_column = a.column;
+    e->span_end_line = b.end_line;
+    e->span_end_column = b.end_column;
+}
+
+// Span covering `from` up to the end of `to`.
+static void joinSpan(Expr* e, const Expr* from, const Expr* to) {
+    if (!e || !from || !to) return;
+    e->span_line = from->span_line > 0 ? from->span_line : from->line;
+    e->span_column = from->span_line > 0 ? from->span_column : from->column;
+    e->span_end_line = to->span_end_line > 0 ? to->span_end_line : to->line;
+    e->span_end_column = to->span_end_line > 0 ? to->span_end_column : to->column + 1;
+}
+
+// left <op> right. The node's line/column is the operator; its span is the whole expression.
+std::unique_ptr<Expr> PyCppParser::makeBinary(std::unique_ptr<Expr> left, const Token& op_token,
+                                              const std::string& op, std::unique_ptr<Expr> right) {
+    auto node = std::make_unique<BinaryOp>();
+    node->line = op_token.line;
+    node->column = op_token.column;
+    joinSpan(node.get(), left.get(), right.get());
+    node->left = std::move(left);
+    node->op = op;
+    node->right = std::move(right);
+    return node;
+}
+
+// ===== Expression Parsing =====
+
 std::unique_ptr<Expr> PyCppParser::parseExpression() {
     return parseAssignment();
 }
@@ -1703,6 +1785,11 @@ std::unique_ptr<Expr> PyCppParser::parseAssignment() {
     if (check(TokenType::IDENTIFIER) && checkNext(TokenType::COLON) &&
         position + 2 < tokens.size() && tokens[position + 2].type == TokenType::EQUAL) {
         return parseWalrusOperator();
+    }
+
+    // lambda has the lowest precedence of all expressions
+    if (check(TokenType::LAMBDA)) {
+        return parseLambda();
     }
 
     auto expr = parseBooleanOperations();
@@ -1717,91 +1804,84 @@ std::unique_ptr<Expr> PyCppParser::parseAssignment() {
         ternary->else_expr = parseAssignment();
         ternary->line = if_token.line;
         ternary->column = if_token.column;
+        joinSpan(ternary.get(), ternary->then_expr.get(), ternary->else_expr.get());
         return ternary;
     }
 
-    // Handle all assignment operators
     if (match(TokenType::EQUAL)) {
+        const Token op_token = tokens[position - 1];
         auto value = parseAssignment();
-        return createAssignment(std::move(expr), "=", std::move(value));
+        return createAssignment(std::move(expr), op_token, "=", std::move(value));
     }
-    else if (match(TokenType::PLUS_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "+=", std::move(value));
-    }
-    else if (match(TokenType::MINUS_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "-=", std::move(value));
-    }
-    else if (match(TokenType::STAR_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "*=", std::move(value));
-    }
-    else if (match(TokenType::SLASH_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "/=", std::move(value));
-    }
-    else if (match(TokenType::DOUBLE_STAR_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "**=", std::move(value));
-    }
-    else if (match(TokenType::FLOOR_DIVIDE_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "//=", std::move(value));
-    }
-    else if (match(TokenType::MODULO_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "%=", std::move(value));
-    }
-    else if (match(TokenType::BITWISE_AND_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "&=", std::move(value));
-    }
-    else if (match(TokenType::BITWISE_OR_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "|=", std::move(value));
-    }
-    else if (match(TokenType::BITWISE_XOR_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "^=", std::move(value));
-    }
-    else if (match(TokenType::LEFT_SHIFT_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), "<<=", std::move(value));
-    }
-    else if (match(TokenType::RIGHT_SHIFT_EQUAL)) {
-        auto value = parseAssignment();
-        return createCompoundAssignment(std::move(expr), ">>=", std::move(value));
+
+    static const std::pair<TokenType, const char*> compound[] = {
+        {TokenType::PLUS_EQUAL, "+="}, {TokenType::MINUS_EQUAL, "-="}, {TokenType::STAR_EQUAL, "*="},
+        {TokenType::SLASH_EQUAL, "/="}, {TokenType::DOUBLE_STAR_EQUAL, "**="},
+        {TokenType::FLOOR_DIVIDE_EQUAL, "//="}, {TokenType::MODULO_EQUAL, "%="},
+        {TokenType::BITWISE_AND_EQUAL, "&="}, {TokenType::BITWISE_OR_EQUAL, "|="},
+        {TokenType::BITWISE_XOR_EQUAL, "^="}, {TokenType::LEFT_SHIFT_EQUAL, "<<="},
+        {TokenType::RIGHT_SHIFT_EQUAL, ">>="},
+    };
+    for (const auto& entry : compound) {
+        if (match(entry.first)) {
+            const Token op_token = tokens[position - 1];
+            auto value = parseAssignment();
+            return createCompoundAssignment(std::move(expr), op_token, entry.second, std::move(value));
+        }
     }
 
     return expr;
 }
 
-std::unique_ptr<Expr> PyCppParser::createCompoundAssignment(std::unique_ptr<Expr> left, const std::string& op, std::unique_ptr<Expr> right) {
+std::unique_ptr<Expr> PyCppParser::createAssignment(std::unique_ptr<Expr> left, const Token& op_token,
+                                                    const std::string& op, std::unique_ptr<Expr> right) {
+    if (!isValidAssignmentTarget(left.get())) {
+        throw std::runtime_error("Invalid assignment target");
+    }
+    return makeBinary(std::move(left), op_token, op, std::move(right));
+}
+
+std::unique_ptr<Expr> PyCppParser::createCompoundAssignment(std::unique_ptr<Expr> left, const Token& op_token,
+                                                            const std::string& op, std::unique_ptr<Expr> right) {
     if (!isValidAssignmentTarget(left.get())) {
         throw std::runtime_error("Invalid assignment target for compound assignment");
     }
+    return makeBinary(std::move(left), op_token, op, std::move(right));   // "+=", "-=", ...
+}
 
-    // Create a BinaryOp with the compound operator
-    auto compound_op = std::make_unique<BinaryOp>();
-    compound_op->left = std::move(left);
-    compound_op->op = op; // This will be "+=", "-=", etc.
-    compound_op->right = std::move(right);
-    compound_op->line = tokens[position - 1].line;
-    compound_op->column = tokens[position - 1].column;
-
-    return compound_op;
+// lambda a, b: a + b
+std::unique_ptr<Expr> PyCppParser::parseLambda() {
+    const size_t first = position;
+    Token keyword = advance();   // 'lambda'
+    auto lambda = std::make_unique<Lambda>();
+    lambda->line = keyword.line;
+    lambda->column = keyword.column;
+    if (!check(TokenType::COLON)) {
+        do {
+            if (check(TokenType::STAR) || check(TokenType::DOUBLE_STAR))
+                throw std::runtime_error("*args and **kwargs in a lambda are not supported yet by PyCPP");
+            lambda->params.push_back(consumeName("Expected a parameter name in lambda"));
+            if (check(TokenType::EQUAL))
+                throw std::runtime_error("default values for lambda parameters are not supported yet by PyCPP");
+        } while (match(TokenType::COMMA));
+    }
+    consume(TokenType::COLON, "Expected ':' after the lambda parameters");
+    lambda->body = parseAssignment();
+    finishSpan(lambda.get(), first);
+    return lambda;
 }
 
 // Python precedence: `not` binds looser than comparisons, tighter than and/or.
 std::unique_ptr<Expr> PyCppParser::parseNot() {
     if (check(TokenType::NOT)) {
+        const size_t first = position;
         Token t = advance();
         auto u = std::make_unique<UnaryOp>();
         u->op = "not";
         u->line = t.line;
         u->column = t.column;
         u->operand = parseNot();
+        finishSpan(u.get(), first);
         return u;
     }
     return parseComparisonWithIs();
@@ -1809,31 +1889,10 @@ std::unique_ptr<Expr> PyCppParser::parseNot() {
 
 std::unique_ptr<Expr> PyCppParser::parseBooleanOperations() {
     auto expr = parseNot();
-
-    while (true) {
-        if (match(TokenType::AND)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "and";
-            op->right = parseNot();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::OR)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "or";
-            op->right = parseNot();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else {
-            break;
-        }
+    while (check(TokenType::AND) || check(TokenType::OR)) {
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, op.type == TokenType::AND ? "and" : "or", parseNot());
     }
-
     return expr;
 }
 
@@ -1841,122 +1900,40 @@ std::unique_ptr<Expr> PyCppParser::parseComparisonWithIs() {
     auto expr = parseComparison();
 
     while (true) {
-        if (match(TokenType::IS)) {
-            // Handle 'is not'
-            if (match(TokenType::NOT)) {
-                auto op = std::make_unique<BinaryOp>();
-                op->left = std::move(expr);
-                op->op = "is not";
-                op->right = parseComparison();
-                op->line = tokens[position - 2].line; // 'is' token
-                op->column = tokens[position - 2].column;
-                expr = std::move(op);
-            }
-            else {
-                auto op = std::make_unique<BinaryOp>();
-                op->left = std::move(expr);
-                op->op = "is";
-                op->right = parseComparison();
-                op->line = tokens[position - 1].line;
-                op->column = tokens[position - 1].column;
-                expr = std::move(op);
-            }
+        if (check(TokenType::IS)) {
+            const Token op = advance();
+            const bool negated = match(TokenType::NOT);   // is not
+            expr = makeBinary(std::move(expr), op, negated ? "is not" : "is", parseComparison());
         }
-        else if (match(TokenType::IN)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "in";
-            op->right = parseComparison();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
+        else if (check(TokenType::IN)) {
+            const Token op = advance();
+            expr = makeBinary(std::move(expr), op, "in", parseComparison());
         }
         else if (check(TokenType::NOT) && checkNext(TokenType::IN)) {
-            advance(); advance();                       // not in
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "not in";
-            op->right = parseComparison();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
+            const Token op = advance();
+            advance();                                    // not in
+            expr = makeBinary(std::move(expr), op, "not in", parseComparison());
         }
         else {
             break;
         }
     }
-
     return expr;
 }
 
 std::unique_ptr<Expr> PyCppParser::parseComparison() {
     auto expr = parseBitOr();
 
-    int comparisons = 0;   // [fix2]
-    while (true) {
-        if (comparisons++ == 1 && (check(TokenType::LESS) || check(TokenType::GREATER) ||
-            check(TokenType::LESS_EQUAL) || check(TokenType::GREATER_EQUAL) ||
-            check(TokenType::DOUBLE_EQUAL) || check(TokenType::NOT_EQUAL)))
+    auto isComparison = [&] {
+        return check(TokenType::LESS) || check(TokenType::GREATER) || check(TokenType::LESS_EQUAL) ||
+               check(TokenType::GREATER_EQUAL) || check(TokenType::DOUBLE_EQUAL) || check(TokenType::NOT_EQUAL);
+    };
+    if (isComparison()) {
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, op.value, parseBitOr());
+        if (isComparison())   // [fix2]
             throw std::runtime_error("chained comparisons such as a < b < c are not supported");
-        if (match(TokenType::LESS)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "<";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::GREATER)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = ">";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::LESS_EQUAL)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "<=";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::GREATER_EQUAL)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = ">=";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::DOUBLE_EQUAL)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "==";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::NOT_EQUAL)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "!=";
-            op->right = parseBitOr();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else {
-            break;
-        }
     }
-
     return expr;
 }
 
@@ -1964,14 +1941,8 @@ std::unique_ptr<Expr> PyCppParser::parseComparison() {
 std::unique_ptr<Expr> PyCppParser::parseBitOr() {
     auto expr = parseBitXor();
     while (check(TokenType::BITWISE_OR)) {
-        advance();
-        auto op = std::make_unique<BinaryOp>();
-        op->left = std::move(expr);
-        op->op = "|";
-        op->right = parseBitXor();
-        op->line = tokens[position - 1].line;
-        op->column = tokens[position - 1].column;
-        expr = std::move(op);
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, "|", parseBitXor());
     }
     return expr;
 }
@@ -1979,14 +1950,8 @@ std::unique_ptr<Expr> PyCppParser::parseBitOr() {
 std::unique_ptr<Expr> PyCppParser::parseBitXor() {
     auto expr = parseBitAnd();
     while (check(TokenType::BITWISE_XOR)) {
-        advance();
-        auto op = std::make_unique<BinaryOp>();
-        op->left = std::move(expr);
-        op->op = "^";
-        op->right = parseBitAnd();
-        op->line = tokens[position - 1].line;
-        op->column = tokens[position - 1].column;
-        expr = std::move(op);
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, "^", parseBitAnd());
     }
     return expr;
 }
@@ -1994,14 +1959,8 @@ std::unique_ptr<Expr> PyCppParser::parseBitXor() {
 std::unique_ptr<Expr> PyCppParser::parseBitAnd() {
     auto expr = parseShift();
     while (check(TokenType::BITWISE_AND)) {
-        advance();
-        auto op = std::make_unique<BinaryOp>();
-        op->left = std::move(expr);
-        op->op = "&";
-        op->right = parseShift();
-        op->line = tokens[position - 1].line;
-        op->column = tokens[position - 1].column;
-        expr = std::move(op);
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, "&", parseShift());
     }
     return expr;
 }
@@ -2009,53 +1968,28 @@ std::unique_ptr<Expr> PyCppParser::parseBitAnd() {
 std::unique_ptr<Expr> PyCppParser::parseShift() {
     auto expr = parseTerm();
     while (check(TokenType::LEFT_SHIFT) || check(TokenType::RIGHT_SHIFT)) {
-        const std::string symbol = advance().value;
-        auto op = std::make_unique<BinaryOp>();
-        op->left = std::move(expr);
-        op->op = symbol;
-        op->right = parseTerm();
-        op->line = tokens[position - 1].line;
-        op->column = tokens[position - 1].column;
-        expr = std::move(op);
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, op.value, parseTerm());
     }
     return expr;
 }
 
 std::unique_ptr<Expr> PyCppParser::parseTerm() {
     auto expr = parseFactor();
-
-    while (true) {
-        if (match(TokenType::PLUS)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "+";
-            op->right = parseFactor();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::MINUS)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "-";
-            op->right = parseFactor();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else {
-            break;
-        }
+    while (check(TokenType::PLUS) || check(TokenType::MINUS)) {
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, op.value, parseFactor());
     }
-
     return expr;
 }
 
 std::unique_ptr<Expr> PyCppParser::parseCall(std::unique_ptr<Expr> callee) {
     auto call = std::make_unique<CallExpr>();
-    call->callee = std::move(callee);
     call->line = tokens[position - 1].line;
     call->column = tokens[position - 1].column;
+    const int span_line = callee->span_line > 0 ? callee->span_line : callee->line;
+    const int span_column = callee->span_line > 0 ? callee->span_column : callee->column;
+    call->callee = std::move(callee);
 
     pycpp::debugLog() << "Parsing function call at position " << position << std::endl;
 
@@ -2064,25 +1998,77 @@ std::unique_ptr<Expr> PyCppParser::parseCall(std::unique_ptr<Expr> callee) {
 
     if (!check(TokenType::RPAREN)) {
         do {
+            if (check(TokenType::RPAREN)) break;   // trailing comma
             call->arguments.push_back(parseExpression());
+            // A generator expression as the only argument: sum(x * x for x in xs)
+            if (check(TokenType::FOR) && call->arguments.size() == 1) {
+                auto comp = std::make_unique<Comprehension>();
+                comp->line = call->arguments[0]->line;
+                comp->column = call->arguments[0]->column;
+                comp->element = std::move(call->arguments[0]);
+                parseComprehensionClauses(*comp);
+                joinSpan(comp.get(), comp->element.get(), comp->element.get());
+                comp->span_end_line = tokens[position - 1].end_line;
+                comp->span_end_column = tokens[position - 1].end_column;
+                call->arguments[0] = std::move(comp);
+                break;
+            }
         } while (match(TokenType::COMMA));
     }
 
     consume(TokenType::RPAREN, "Expected ')' after arguments");
+    call->span_line = span_line;
+    call->span_column = span_column;
+    call->span_end_line = tokens[position - 1].end_line;
+    call->span_end_column = tokens[position - 1].end_column;
 
     return call;
+}
+
+// `for a, b in xs if cond` clauses after the element of a comprehension
+void PyCppParser::parseComprehensionClauses(Comprehension& comp) {
+    while (check(TokenType::FOR)) {
+        CompFor clause;
+        const Token keyword = advance();
+        clause.line = keyword.line;
+        clause.column = keyword.column;
+        do {
+            clause.var_names.push_back(consumeName("Expected a loop variable name in the comprehension"));
+        } while (match(TokenType::COMMA));
+        consume(TokenType::IN, "Expected 'in' after the comprehension variable");
+        clause.iterable = parseBooleanOperations();   // no conditional expression here, as in Python
+        while (match(TokenType::IF)) {
+            clause.conditions.push_back(parseBooleanOperations());
+        }
+        comp.clauses.push_back(std::move(clause));
+    }
 }
 
 // Prefix operators: -x, +x, &x (address-of), *p (dereference)
 std::unique_ptr<Expr> PyCppParser::parseUnary() {
     if (check(TokenType::MINUS) || check(TokenType::PLUS) ||
         check(TokenType::BITWISE_AND) || check(TokenType::STAR)) {
+        const size_t first = position;
         Token op_token = advance();
+
+        // -9223372036854775808 is the smallest i64; its magnitude alone does not fit in 64 bits
+        if (op_token.type == TokenType::MINUS && check(TokenType::NUMBER) &&
+            peek().value == "9223372036854775808") {
+            advance();
+            auto lit = std::make_unique<IntLiteral>();
+            lit->value = std::numeric_limits<long long>::min();
+            lit->line = op_token.line;
+            lit->column = op_token.column;
+            finishSpan(lit.get(), first);
+            return lit;
+        }
+
         auto unary = std::make_unique<UnaryOp>();
         unary->op = op_token.value;
         unary->line = op_token.line;
         unary->column = op_token.column;
         unary->operand = parseUnary();
+        finishSpan(unary.get(), first);
         return unary;
     }
     return parsePrimary();
@@ -2090,58 +2076,11 @@ std::unique_ptr<Expr> PyCppParser::parseUnary() {
 
 std::unique_ptr<Expr> PyCppParser::parseFactor() {
     auto expr = parseUnary();
-
-    while (true) {
-        if (match(TokenType::STAR)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "*";
-            op->right = parseUnary();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::SLASH)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "/";
-            op->right = parseUnary();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::PERCENT)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "%";
-            op->right = parseUnary();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::DOUBLE_STAR)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "**";
-            op->right = parseUnary();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else if (match(TokenType::FLOOR_DIVIDE)) {
-            auto op = std::make_unique<BinaryOp>();
-            op->left = std::move(expr);
-            op->op = "//";
-            op->right = parseUnary();
-            op->line = tokens[position - 1].line;
-            op->column = tokens[position - 1].column;
-            expr = std::move(op);
-        }
-        else {
-            break;
-        }
+    while (check(TokenType::STAR) || check(TokenType::SLASH) || check(TokenType::PERCENT) ||
+           check(TokenType::DOUBLE_STAR) || check(TokenType::FLOOR_DIVIDE)) {
+        const Token op = advance();
+        expr = makeBinary(std::move(expr), op, op.value, parseUnary());
     }
-
     return expr;
 }
 
@@ -2160,6 +2099,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
     recursion_depth++;
 
     std::unique_ptr<Expr> result = nullptr;
+    const size_t first = position;   // first token of this primary, for its source span
 
     try {
         // Handle built-in function identifiers FIRST
@@ -2192,16 +2132,19 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
             else {
                 auto lit = std::make_unique<IntLiteral>();
                 try {
-                    lit->value = std::stoi(tokens[position - 1].value);
+                    lit->value = std::stoll(tokens[position - 1].value);
                 }
                 catch (const std::exception&) {
                     throw std::runtime_error("integer literal '" + tokens[position - 1].value +
-                                             "' is out of range for int");
+                                             "' is out of range: the largest supported integer is 9223372036854775807");
                 }
                 lit->line = tokens[position - 1].line;
                 lit->column = tokens[position - 1].column;
                 result = std::move(lit);
             }
+        }
+        else if (check(TokenType::FSTRING)) {
+            result = parseFString(advance());
         }
         else if (match(TokenType::STRING_LITERAL)) {
             auto lit = std::make_unique<StringLiteral>();
@@ -2259,6 +2202,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                         member_line,
                         member_column
                     );
+                    finishSpan(member_access.get(), first);
                     current_expr = std::move(member_access);
                 }
                 else {
@@ -2309,9 +2253,11 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 array_access->arguments.push_back(std::move(index));
                 array_access->line = tokens[position - 1].line;
                 array_access->column = tokens[position - 1].column;
+                finishSpan(array_access.get(), first);
                 result = std::move(array_access);
             }
             else {
+                finishSpan(current_expr.get(), first);
                 result = std::move(current_expr);
             }
         }
@@ -2358,15 +2304,30 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 if (peek().type == TokenType::NEWLINE || peek().type == TokenType::DEDENT)
                     throw std::runtime_error("expected an expression, but the line ended");
                 switch (peek().type) {   // [fix2] Python keywords PyCPP does not implement
-                case TokenType::LAMBDA: case TokenType::WITH: case TokenType::ASYNC: case TokenType::AWAIT:
-                case TokenType::YIELD: case TokenType::GLOBAL: case TokenType::NONLOCAL:
+                case TokenType::WITH:
+                    throw std::runtime_error(withHint("'with' statements are not supported yet by PyCPP",
+                                             "use `defer` to run cleanup code when the enclosing block ends, e.g. `defer f.close()`"));
+                case TokenType::YIELD:
+                    throw std::runtime_error(withHint("generators ('yield') are not supported yet by PyCPP",
+                                             "build and return a list instead, for example with a list comprehension"));
+                case TokenType::ASYNC: case TokenType::AWAIT:
+                    throw std::runtime_error(withHint("'" + peek().value + "' is not supported yet by PyCPP",
+                                             "for concurrency, use C++ threads through `use <thread>`"));
+                case TokenType::GLOBAL: case TokenType::NONLOCAL:
+                    throw std::runtime_error(withHint("'" + peek().value + "' is not supported yet by PyCPP",
+                                             "pass the value as a parameter and return the new value, or keep it in an object"));
                 case TokenType::EXEC: case TokenType::EVAL: case TokenType::COMPILE:
-                    throw std::runtime_error("'" + peek().value + "' is not supported yet by PyCPP");
+                    throw std::runtime_error(withHint("'" + peek().value + "' is not supported by PyCPP",
+                                             "PyCPP is compiled ahead of time, so code cannot be evaluated at run time"));
                 default: break;
                 }
                 throw std::runtime_error("Expected expression, got: '" + peek().value + "'");
             }
         }
+
+        if (result && result->span_line == 0) finishSpan(result.get(), first);
+        else if (result && first < tokens.size() && tokens[first].type == TokenType::LPAREN)
+            finishSpan(result.get(), first);   // (a + b): include the parentheses
 
         // [fix.py] Postfix operators after ANY primary expression, not just after a bare
         // identifier: (*p).x   a[i].x   f(x).y   obj.method().field   a[i][j]
@@ -2379,6 +2340,7 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 Token member = advance();
                 result = std::make_unique<MemberAccess>(std::move(result), member.value,
                                                         member.line, member.column);
+                finishSpan(result.get(), first);
             }
             else if (check(TokenType::LBRACKET)) {
                 Token open = advance();
@@ -2391,9 +2353,11 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 subscript->line = open.line;
                 subscript->column = open.column;
                 result = std::move(subscript);
+                finishSpan(result.get(), first);
             }
             else if (check(TokenType::LPAREN)) {
                 result = parseCall(std::move(result));
+                finishSpan(result.get(), first);
             }
             else {
                 break;
@@ -2424,9 +2388,21 @@ std::unique_ptr<Expr> PyCppParser::parseListLiteral() {
     pycpp::debugLog() << "Parsing list literal at position " << position << std::endl;
 
     if (!check(TokenType::RBRACKET)) {
-        do {
+        list->elements.push_back(parseExpression());
+        if (check(TokenType::FOR)) {   // [x * 2 for x in xs if x > 0]
+            auto comp = std::make_unique<Comprehension>();
+            comp->kind = Comprehension::Kind::List;
+            comp->line = list->line;
+            comp->column = list->column;
+            comp->element = std::move(list->elements[0]);
+            parseComprehensionClauses(*comp);
+            consume(TokenType::RBRACKET, "Expected ']' after the list comprehension");
+            return comp;
+        }
+        while (match(TokenType::COMMA)) {
+            if (check(TokenType::RBRACKET)) break;   // trailing comma
             list->elements.push_back(parseExpression());
-        } while (match(TokenType::COMMA));
+        }
     }
 
     consume(TokenType::RBRACKET, "Expected ']' after list elements");
@@ -2441,12 +2417,38 @@ std::unique_ptr<Expr> PyCppParser::parseDictLiteral() {
     pycpp::debugLog() << "Parsing dict literal at position " << position << std::endl;
 
     if (!check(TokenType::RBRACE)) {
-        do {
+        auto first_key = parseExpression();
+        if (check(TokenType::FOR)) {   // {x for x in xs}: set comprehension
+            auto comp = std::make_unique<Comprehension>();
+            comp->kind = Comprehension::Kind::Set;
+            comp->line = dict->line;
+            comp->column = dict->column;
+            comp->element = std::move(first_key);
+            parseComprehensionClauses(*comp);
+            consume(TokenType::RBRACE, "Expected '}' after the set comprehension");
+            return comp;
+        }
+        consume(TokenType::COLON, "Expected ':' after dictionary key");
+        auto first_value = parseExpression();
+        if (check(TokenType::FOR)) {   // {k: v for k, v in pairs}: dict comprehension
+            auto comp = std::make_unique<Comprehension>();
+            comp->kind = Comprehension::Kind::Dict;
+            comp->line = dict->line;
+            comp->column = dict->column;
+            comp->element = std::move(first_key);
+            comp->value = std::move(first_value);
+            parseComprehensionClauses(*comp);
+            consume(TokenType::RBRACE, "Expected '}' after the dict comprehension");
+            return comp;
+        }
+        dict->items.emplace_back(std::move(first_key), std::move(first_value));
+        while (match(TokenType::COMMA)) {
+            if (check(TokenType::RBRACE)) break;   // trailing comma
             auto key = parseExpression();
             consume(TokenType::COLON, "Expected ':' after dictionary key");
             auto value = parseExpression();
             dict->items.emplace_back(std::move(key), std::move(value));
-        } while (match(TokenType::COMMA));
+        }
     }
 
     consume(TokenType::RBRACE, "Expected '}' after dictionary items");
@@ -2459,7 +2461,7 @@ std::unique_ptr<Expr> PyCppParser::parseWalrusOperator() {
     int column = peek().column;
 
     // Parse the identifier
-    std::string var_name = consume(TokenType::IDENTIFIER, "Expected variable name").value;
+    std::string var_name = consumeName("Expected variable name");
     consume(TokenType::COLON, "Expected ':' in walrus operator");
     consume(TokenType::EQUAL, "Expected '=' in walrus operator");
 
@@ -2667,4 +2669,138 @@ std::unique_ptr<Stmt> PyCppParser::parseMatchStmt() {
         m->cases.push_back(std::move(c));
     }
     return m;
+}
+
+// ===== f-strings =====
+
+// Escape sequences in the literal text of an f-string (the lexer keeps them raw).
+static std::string unescapeFStringText(const std::string& raw) {
+    std::string out;
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] != '\\' || i + 1 >= raw.size()) { out += raw[i]; continue; }
+        const char c = raw[++i];
+        switch (c) {
+        case 'n': out += '\n'; break;
+        case 't': out += '\t'; break;
+        case 'r': out += '\r'; break;
+        case '\\': out += '\\'; break;
+        case '"': out += '"'; break;
+        case '\'': out += '\''; break;
+        default: out += '\\'; out += c; break;
+        }
+    }
+    return out;
+}
+
+// f"a {x + 1:>5} b {y!r} {z=}"  ->  FString with literal and replacement-field parts.
+// Each field's expression is lexed and parsed on its own, with token columns shifted
+// so that diagnostics point into the f-string.
+std::unique_ptr<Expr> PyCppParser::parseFString(const Token& token) {
+    auto fs = std::make_unique<FString>();
+    fs->line = token.line;
+    fs->column = token.column;
+    const std::string& raw = token.value;
+    const int body_column = token.column + 2;   // after f and the opening quote
+
+    std::string text;
+    auto flushText = [&] {
+        if (text.empty()) return;
+        FStringPart part;
+        part.text = unescapeFStringText(text);
+        fs->parts.push_back(std::move(part));
+        text.clear();
+    };
+    auto fail = [&](const std::string& message, size_t offset) {
+        reportError(message, token.line, body_column + static_cast<int>(offset));
+    };
+
+    for (size_t i = 0; i < raw.size(); ++i) {
+        const char c = raw[i];
+        if (c == '\\' && i + 1 < raw.size()) { text += c; text += raw[++i]; continue; }
+        if (c == '{' && i + 1 < raw.size() && raw[i + 1] == '{') { text += '{'; ++i; continue; }
+        if (c == '}' && i + 1 < raw.size() && raw[i + 1] == '}') { text += '}'; ++i; continue; }
+        if (c == '}') { fail("f-string: single '}' is not allowed; write '}}' for a literal brace", i); continue; }
+        if (c != '{') { text += c; continue; }
+
+        // Find the end of the replacement field, skipping nested brackets and strings
+        const size_t open = i;
+        size_t j = i + 1;
+        int depth = 0;
+        char quote = 0;
+        size_t colon = std::string::npos, bang = std::string::npos;
+        for (; j < raw.size(); ++j) {
+            const char d = raw[j];
+            if (quote) { if (d == quote) quote = 0; continue; }
+            if (d == '"' || d == '\'') { quote = d; continue; }
+            if (d == '(' || d == '[' || d == '{') { depth++; continue; }
+            if ((d == ')' || d == ']' || d == '}') && depth > 0) { depth--; continue; }
+            if (d == '}' && depth == 0) break;
+            if (depth == 0 && d == '!' && bang == std::string::npos && colon == std::string::npos &&
+                j + 1 < raw.size() && raw[j + 1] != '=') bang = j;
+            if (depth == 0 && d == ':' && colon == std::string::npos) colon = j;
+        }
+        if (j >= raw.size()) { fail("f-string: '{' is never closed; write '{{' for a literal brace", open); break; }
+
+        flushText();
+        FStringPart part;
+        size_t expr_end = std::min({ j, colon, bang });
+        if (colon != std::string::npos && colon < j) part.spec = raw.substr(colon + 1, j - colon - 1);
+        if (bang != std::string::npos && bang < j) {
+            const size_t conv_end = colon != std::string::npos && colon < j ? colon : j;
+            const std::string conv = raw.substr(bang + 1, conv_end - bang - 1);
+            if (conv != "r" && conv != "s") {
+                fail("f-string: unknown conversion '!" + conv + "'; use !r or !s", bang);
+                i = j;
+                continue;
+            }
+            part.conversion = conv[0];
+        }
+        std::string expr_text = raw.substr(open + 1, expr_end - open - 1);
+        // f"{x=}" prints "x=" before the value
+        {
+            const size_t last = expr_text.find_last_not_of(" \t");
+            if (last != std::string::npos && expr_text[last] == '=' &&
+                (last == 0 || std::string("=!<>").find(expr_text[last - 1]) == std::string::npos)) {
+                part.debug_text = expr_text.substr(0, last + 1);
+                expr_text = expr_text.substr(0, last);
+                if (!part.conversion && part.spec.empty()) part.conversion = 'r';
+            }
+        }
+        if (expr_text.find_first_not_of(" \t") == std::string::npos) {
+            fail("f-string: empty expression in '{}'", open);
+            i = j;
+            continue;
+        }
+
+        // Lex and parse the expression on its own, then move its tokens to where they are
+        Lexer lexer(expr_text);
+        std::vector<Token> field_tokens = lexer.tokenize();
+        const int shift = body_column + static_cast<int>(open + 1) - 1;
+        std::vector<Token> placed;
+        for (auto t : field_tokens) {
+            if (t.type == TokenType::NEWLINE || t.type == TokenType::INDENT || t.type == TokenType::DEDENT) continue;
+            t.line = token.line;
+            t.column += shift;
+            t.end_line = token.line;
+            t.end_column += shift;
+            placed.push_back(t);
+        }
+        PyCppParser sub(placed);
+        sub.generic_names = generic_names;
+        try {
+            part.expr = sub.parseExpression();
+            if (!sub.atEnd())
+                throw std::runtime_error("f-string: unexpected '" + sub.peek().value + "' in the replacement field");
+        }
+        catch (const std::runtime_error& e) {
+            const Token where = sub.atEnd() ? placed.empty() ? token : placed.back() : sub.peek();
+            reportError(e.what(), where.line, where.column);
+            part.expr.reset();
+        }
+        for (auto& err : sub.errors) errors.push_back(err);
+        if (part.expr) fs->parts.push_back(std::move(part));
+        i = j;
+    }
+    flushText();
+    return fs;
 }

@@ -1,0 +1,40 @@
+# expect-exit: 0
+# expect-stdout: Rex the dog says Woof (legs: 4)
+# expect-stdout: base hello / derived hello
+# expect-stdout: AppError: bad config (code 7)
+class Animal:
+    def __init__(self, name: str, legs: int):
+        self.name: str = name
+        self.legs: int = legs
+
+    def describe(self) -> str:
+        return f"{self.name} the animal"
+
+    def hello(self) -> str:
+        return "base hello"
+
+class Dog(Animal):
+    def __init__(self, name: str):
+        super().__init__(name, 4)
+        self.sound: str = "Woof"
+
+    def describe(self) -> str:
+        return super().describe().replace("animal", "dog") + f" says {self.sound} (legs: {self.legs})"
+
+    def hello(self) -> str:
+        return super().hello() + " / derived hello"
+
+class AppError(Exception):
+    def __init__(self, message: str, code: int):
+        super().__init__(message)
+        self.code: int = code
+
+def main() -> int:
+    d = Dog("Rex")
+    print(d.describe())
+    print(d.hello())
+    try:
+        raise AppError("bad config", 7)
+    except AppError as e:
+        print(f"AppError: {e} (code {e.code})")
+    return 0

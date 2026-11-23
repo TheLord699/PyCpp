@@ -1,0 +1,7 @@
+# expect-exit: 0
+# args: --check --error-format short
+# expect-stderr: short_diagnostics.pycpp:6:5: warning[W0001]: unused variable 'spare'
+# expect-no-stderr: -->
+def main() -> int:
+    spare: int = 1
+    return 0

@@ -35,14 +35,20 @@ private:
     void skipIndentedRegion();
     void handleIndentation();
     bool isBuiltInFunctionToken(TokenType type);
+    std::string consumeName(const std::string& error_msg);
 
     // Expression parsing helpers
     bool isMemberAccess();
     bool isMemberAccessDeclaration();
     bool isClassAttributeDeclaration();
     bool isValidAssignmentTarget(Expr* expr);
-    std::unique_ptr<Expr> createAssignment(std::unique_ptr<Expr> left, const std::string& op, std::unique_ptr<Expr> right);
-    std::unique_ptr<Expr> createCompoundAssignment(std::unique_ptr<Expr> left, const std::string& op, std::unique_ptr<Expr> right);
+    std::unique_ptr<Expr> createAssignment(std::unique_ptr<Expr> left, const Token& op_token, const std::string& op, std::unique_ptr<Expr> right);
+    std::unique_ptr<Expr> createCompoundAssignment(std::unique_ptr<Expr> left, const Token& op_token, const std::string& op, std::unique_ptr<Expr> right);
+    std::unique_ptr<Expr> makeBinary(std::unique_ptr<Expr> left, const Token& op_token, const std::string& op, std::unique_ptr<Expr> right);
+    void finishSpan(Expr* e, size_t first_token);
+    void parseComprehensionClauses(Comprehension& comp);
+    std::unique_ptr<Expr> parseLambda();
+    std::unique_ptr<Expr> parseFString(const Token& token);
 
 public:
     PyCppParser(const std::vector<Token>& tokens);

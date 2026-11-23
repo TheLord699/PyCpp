@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: error[E0010]: integer literal 3000000000 does not fit in 'int'
+# expect-stderr: declare the variable as i64
+def main() -> int:
+    x: int = 3000000000
+    print(x)
+    return 0

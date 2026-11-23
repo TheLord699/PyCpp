@@ -1,0 +1,20 @@
+# expect-exit: 0
+# expect-stdout: [1, 9, 25]
+# expect-stdout: ['A', 'B']
+# expect-stdout: [3, 6, 8]
+# expect-stdout: {'x': 1, 'yy': 2}
+# expect-stdout: {0, 1, 2}
+# expect-stdout: 30
+def main() -> int:
+    odd_squares = [n * n for n in range(6) if n % 2 == 1]
+    print(odd_squares)
+    upper: list[str] = [s.upper() for s in ["a", "b"]]
+    print(upper)
+    products = [a * b for a in [1, 2] for b in [3, 4] if a * b != 4]
+    print(products)
+    lengths = {w: len(w) for w in ["x", "yy"]}
+    print(lengths)
+    mods = {n % 3 for n in range(10)}
+    print(mods)
+    print(sum(n * n for n in range(5)))
+    return 0

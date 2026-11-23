@@ -1,0 +1,8 @@
+# expect-exit: 0
+# expect-stderr: warning[W0008]
+# expect-stderr:  |              ^^^^^^
+# expect-no-stderr: ^^^^^^^
+def main() -> int:
+    x: int = 10 / 4
+    print(x)
+    return 0

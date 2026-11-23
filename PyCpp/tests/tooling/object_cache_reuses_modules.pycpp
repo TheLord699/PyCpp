@@ -1,0 +1,9 @@
+# expect-exit: 0
+# runs: 2
+# args: -v
+# expect-stdout: (0 of 1 modules changed
+# expect-stdout: object_cache_reuses_modules.cpp  (up to date)
+# expect-stdout: cached run
+def main() -> int:
+    print("cached run")
+    return 0

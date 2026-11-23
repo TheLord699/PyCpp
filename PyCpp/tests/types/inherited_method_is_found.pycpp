@@ -1,0 +1,15 @@
+# expect-exit: 0
+# expect-no-stderr: error
+# expect-stdout: moving 3
+class Base:
+    def move(self, steps: int) -> void:
+        print("moving", steps)
+
+class Child(Base):
+    def other(self) -> void:
+        pass
+
+def main() -> int:
+    c = Child()
+    c.move(3)
+    return 0

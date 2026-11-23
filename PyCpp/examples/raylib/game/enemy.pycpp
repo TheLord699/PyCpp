@@ -4,10 +4,7 @@ from vec2 import Vec2
 
 class Enemy(Entity):
     def __init__(self, start_pos: Vec2):
-        self.pos: Vec2 = start_pos
-        self.size: float = 30.0
-        self.color: Color = RED
-        self.active: bool = true
+        super().__init__(start_pos, 30.0, RED)
         self.speed: float = 3.0
 
     def update(self, delta: float) -> void:

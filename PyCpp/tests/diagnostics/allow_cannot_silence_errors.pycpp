@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: error[E0101]: cannot find 'nope'
+def main() -> int:
+    print(nope)  # allow: all
+    return 0

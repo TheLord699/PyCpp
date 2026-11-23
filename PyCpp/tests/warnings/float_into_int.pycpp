@@ -1,5 +1,5 @@
 # expect-exit: 0
-# expect-stderr: this value is a float but 'x' is int
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when stored in 'x' (int)
 # expect-stdout: 3
 def main() -> int:
     x: int = 7 / 2

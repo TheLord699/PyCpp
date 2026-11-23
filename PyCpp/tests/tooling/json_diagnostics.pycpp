@@ -1,0 +1,8 @@
+# expect-exit: 1
+# args: --check --error-format=json
+# expect-stderr: "line":7,"column":11,"end_line":7,"end_column":15,"severity":"error","code":"E0101","name":"unknown-name"
+# expect-stderr: "message":"cannot find 'nope' in this scope"}
+# expect-no-stderr: could not compile
+def main() -> int:
+    print(nope)
+    return 0

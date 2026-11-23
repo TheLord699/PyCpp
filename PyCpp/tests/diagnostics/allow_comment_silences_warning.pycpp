@@ -1,0 +1,15 @@
+# expect-exit: 0
+# expect-no-stderr: 'scratch'
+# expect-no-stderr: 'half'
+# expect-no-stderr: 'also_ok'
+# expect-no-stderr: W0008
+# expect-stderr: warning[W0001]: unused variable 'not_allowed'
+# expect-stdout: 2
+def main() -> int:
+    scratch: int = 1  # allow: unused
+    # allow: unused, division
+    half: int = 5 / 2
+    also_ok: int = 3  # allow: W0001
+    not_allowed: int = 4  # allow: division
+    print(int(2.5))
+    return 0

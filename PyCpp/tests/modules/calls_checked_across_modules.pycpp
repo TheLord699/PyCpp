@@ -1,0 +1,11 @@
+# expect-exit: 1
+# expect-stderr: error[E0106]: 'Circle' (its __init__) takes 1 argument but 0 were supplied
+# expect-stderr: error[E0112]: no method named 'aera' in class 'Circle'
+# expect-stderr: error[E0106]: function 'describe' takes 2 arguments but 1 was supplied
+from lib.shapes import Circle, describe
+
+def main() -> int:
+    c = Circle()
+    print(c.aera())
+    print(describe(c))
+    return 0

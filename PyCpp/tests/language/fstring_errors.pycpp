@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: error[E0014]: f-string: '{' is never closed
+# expect-stderr: error[E0014]: f-string: empty expression
+def main() -> int:
+    a: str = f"broken {name"
+    b: str = f"empty {}"
+    return 0

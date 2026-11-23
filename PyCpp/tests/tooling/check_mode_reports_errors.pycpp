@@ -1,0 +1,6 @@
+# expect-exit: 1
+# args: --check
+# expect-stderr: error[E0101]
+def main() -> int:
+    print(nope)
+    return 0

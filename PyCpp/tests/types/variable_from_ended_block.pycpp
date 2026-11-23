@@ -1,0 +1,9 @@
+# expect-exit: 1
+# expect-stderr: error[E0101]: cannot find 'total' in this scope
+# expect-stderr: 'total' was declared at line 7 inside a block that has already ended
+def main() -> int:
+    flag: bool = True
+    if flag:
+        total = 1
+    print(total)
+    return 0

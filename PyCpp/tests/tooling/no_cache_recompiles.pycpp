@@ -1,0 +1,6 @@
+# expect-exit: 0
+# runs: 2
+# args: -v --no-cache
+# expect-stdout: (1 of 1 modules changed
+def main() -> int:
+    return 0

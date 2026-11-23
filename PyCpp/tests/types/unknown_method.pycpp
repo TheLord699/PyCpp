@@ -1,0 +1,20 @@
+# expect-exit: 1
+# expect-stderr: error[E0112]: no method named 'jumpp' in class 'Player'
+# expect-stderr: a method with a similar name exists: 'jump'
+# expect-stderr: error[E0112]: 'str' has no method named 'uppper'
+# expect-stderr: did you mean 'upper'?
+# expect-stderr: error[E0106]: method 'list.append' takes 1 argument but 2 were supplied
+# expect-stderr: error[E0107]: mismatched types: argument 1 of 'list.append' expects int, found str
+class Player:
+    def jump(self) -> void:
+        pass
+
+def main() -> int:
+    p = Player()
+    p.jumpp()
+    name = "x"
+    name.uppper()
+    xs: list[int] = []
+    xs.append(1, 2)
+    xs.append("one")
+    return 0

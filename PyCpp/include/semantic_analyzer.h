@@ -28,6 +28,7 @@ private:
         std::vector<std::pair<std::string, std::string>> parameters;
         size_t required = 0;      // [fix2] parameters without a default value
         bool generic = false;
+        int line = 0;             // where it is defined (for notes)
     };
 
     struct ClassSymbol {
@@ -50,6 +51,9 @@ private:
     std::unordered_map<std::string, FunctionSymbol> functions;
     std::unordered_map<std::string, ClassSymbol> classes;
     std::unordered_set<std::string> generic_params; // type parameters such as T from def f[T] / class C[T]
+    std::string module_stem;                        // name of this module's generated files (cross-module checks)
+    std::unordered_map<std::string, int> ended_names;   // variables whose block has ended (name -> line)
+    std::unordered_map<const Expr*, std::string> expr_types;   // types computed while a scope was open
     bool has_cpp_headers = false;  // a `use <header>` is present: C++ names are not ours to check
 
     // Current context
@@ -59,6 +63,10 @@ private:
 
     // Built-in usage tracking
     std::unordered_set<std::string> used_builtins;
+
+    static std::unordered_map<std::string, ClassSymbol>& exportedClasses();
+    static std::unordered_map<std::string, FunctionSymbol>& exportedFunctions();
+    void registerClassMembers(ClassDef* cls);
 
     // Scope management
     void enterScope();
@@ -73,6 +81,27 @@ private:
     std::string typeToString(Type* type);
     std::string getExpressionType(Expr* expr);
     bool isValidAssignmentTarget(Expr* expr);
+    bool isSubclassOf(const std::string& derived, const std::string& base);
+    const ClassSymbol* classOf(const std::string& type);
+    const FunctionSymbol* findMethod(const std::string& cls, const std::string& name);
+    const Symbol* findAttribute(const std::string& cls, const std::string& name);
+    bool classFullyKnown(const std::string& cls);
+    std::string elementTypeOf(const std::string& container);
+    std::unique_ptr<Type> typeFromString(const std::string& type);
+
+    // Calls: arity and argument types against a signature
+    void checkCallArguments(CallExpr* call, const std::string& what, const FunctionSymbol& fs,
+                            int name_length);
+    void checkMethodCall(CallExpr* call, MemberAccess* callee);
+    void checkSuper(CallExpr* super_call);
+    bool isSuperCall(Expr* expr);
+    void checkIntegerTarget(Expr* value, const std::string& target_type, const std::string& what);
+
+    // `x = value` with no declaration in scope declares x (type inference)
+    void inferDeclaration(std::unique_ptr<Stmt>& stmt);
+    void analyzeBody(std::vector<std::unique_ptr<Stmt>>& body, bool guarded = false);
+    bool terminates(const std::vector<std::unique_ptr<Stmt>>& body);
+    bool terminates(Stmt* stmt);
 
     // Analysis methods
     void analyzeProgram(Program* program);
@@ -107,12 +136,18 @@ private:
     void trackBuiltinUsage(const std::string& builtin);
 
     // Error reporting
-    void error(const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
-    void warning(const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
+    void error(const char* code, const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
+    void warning(const char* code, const std::string& message, int line, int column, const std::string& hint = "", int length = 1);
+    void errorAt(const char* code, const std::string& message, const ASTNode* node, const std::string& hint = "");
+    void warningAt(const char* code, const std::string& message, const ASTNode* node, const std::string& hint = "");
 
 public:
     SemanticAnalyzer();
     void analyze(std::unique_ptr<Program>& program);
+    // Classes and functions of analysed modules are remembered under their module's
+    // generated name, so a module that imports them can check calls against them.
+    void setModuleStem(const std::string& stem) { module_stem = stem; }
+    static void resetModuleExports();
 
     // Visitor pattern implementations
     void visit(Program& node) override;

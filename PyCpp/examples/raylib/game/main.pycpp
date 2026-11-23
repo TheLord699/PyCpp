@@ -56,19 +56,9 @@ def main() -> int:
                     game_over = true
 
             # --- CLEANUP ---
-            # Filter out inactive bullets and enemies
-            # PyCPP doesn't have list comprehensions yet, so we do it manually
-            active_bullets: list[Bullet] = []
-            for b in bullets:
-                if b.active:
-                    active_bullets.append(b)
-            bullets = active_bullets
-
-            active_enemies: list[Enemy] = []
-            for e in enemies:
-                if e.active:
-                    active_enemies.append(e)
-            enemies = active_enemies
+            # Keep only the bullets and enemies that are still active
+            bullets = [b for b in bullets if b.active]
+            enemies = [e for e in enemies if e.active]
 
         # --- DRAW ---
         BeginDrawing()

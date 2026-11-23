@@ -22,6 +22,23 @@ struct CompileRequest {
     bool optimize = false;         // -O2 / /O2 (used by --build)
 };
 
+// One translation unit of an incremental build.
+struct BuildUnit {
+    std::string cppFile;     // generated implementation file
+    std::string objFile;     // object file it compiles to (may be reused from the cache)
+    bool compile = true;     // false: objFile is up to date
+};
+
+// An incremental, parallel build: compile the units that need it, then link everything.
+struct BuildRequest {
+    std::vector<BuildUnit> units;
+    std::string exeFile;
+    std::string includeDir;
+    std::string linkerFlags;
+    bool optimize = false;
+    unsigned jobs = 1;       // compiler processes run at the same time (g++/clang++)
+};
+
 class CompilerBackend {
 public:
     // Accepts "gcc", "g++", "clang", "clang++", "msvc", "cl" or "auto" (case-insensitive).
@@ -48,6 +65,19 @@ public:
     // line. Returns true when an executable was produced.
     static bool compile(CompilerKind kind, const CompileRequest& request, bool verbose,
         const std::function<void(const std::string&)>& onOutput);
+
+    // Commands of an incremental build (pure, for tests and --verbose)
+    static std::string buildObjectCommand(CompilerKind kind, const std::string& cppFile, const std::string& objFile,
+        const std::string& includeDir, bool optimize);
+    static std::string buildLinkCommand(CompilerKind kind, const std::vector<std::string>& objFiles,
+        const std::string& exeFile, const std::string& linkerFlags);
+    static std::string objectExtension(CompilerKind kind);   // ".o" or ".obj"
+
+    // Compile the units that need it (in parallel) and link. `onOutput` receives the
+    // compiler's output, kept together per unit. `compiled` reports, per unit, whether
+    // a fresh object file was produced. Returns true when the executable was produced.
+    static bool build(CompilerKind kind, const BuildRequest& request, bool verbose,
+        const std::function<void(const std::string&)>& onOutput, std::vector<bool>& compiled);
 
     // Run a finished executable, passing its output to `onOutput` line by line.
     // Returns the program's exit code, or -1 if it could not be started.

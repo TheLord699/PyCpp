@@ -1,0 +1,18 @@
+# expect-exit: 1
+# expect-stderr: error[E0106]: method 'Counter.add' takes 1 argument but 2 were supplied
+# expect-stderr: signature: add(amount: int) -> int
+# expect-stderr: error[E0106]: 'Counter' (its __init__) takes 1 to 2 arguments but 0 were supplied
+class Counter:
+    def __init__(self, start: int, step: int = 1):
+        self.value: int = start
+        self.step: int = step
+
+    def add(self, amount: int) -> int:
+        self.value += amount
+        return self.value
+
+def main() -> int:
+    c = Counter(1)
+    c.add(1, 2)
+    d = Counter()
+    return 0

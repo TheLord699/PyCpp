@@ -16,6 +16,8 @@ namespace pycpp {
 void registerClasses(Program* program);
 bool isInheritedMember(const std::string& class_name, const std::string& member);
 bool hasSubclasses(const std::string& class_name);
+bool hasMember(const std::string& class_name, const std::string& member);   // own or inherited
+void resetClassRegistry();   // forget every class (used by --watch between runs)
 bool& lineDirectives();   // [fix2] emit #line so C++ errors point at the .pycpp source
 // [fix.py] declared type of a member (searches base classes); nullptr when unknown
 Type* memberType(const std::string& class_name, const std::string& member);
@@ -69,7 +71,7 @@ private:
     void generateTemplateHeader(const std::vector<std::string>& params);
     void generateParameters(FunctionDef* func, bool include_defaults);
     void generatePrototype(FunctionDef* func);
-    void collectConstructorInitializers(FunctionDef* ctor,
+    void collectConstructorInitializers(FunctionDef* ctor, size_t start,
         std::vector<std::pair<std::string, std::string>>& inits, size_t& consumed_count);
     std::string formatDouble(double value);
 
@@ -89,6 +91,12 @@ private:
     void generateType(Type* type);
     void generateExpression(Expr* expr);
     void generateRangeLoop(ForStmt& node, CallExpr* call);
+    void generateComprehension(Comprehension* comp);
+    void generateFString(FString* fs);
+    void generateLambda(Lambda* lambda);
+    std::string intLiteralText(long long value);
+    bool isSuperCall(Expr* expr);
+    bool isUserObject(Expr* expr);   // a PyCPP/C++ class object (not str/list/dict/set)
 
     void generateMemberInitializerList(FunctionDef* constructor, ClassDef* cls);
     void generateConstructorBody(FunctionDef* constructor, ClassDef* cls);

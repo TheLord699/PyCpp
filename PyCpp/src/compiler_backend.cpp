@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <mutex>
+#include <thread>
 
 #ifdef _WIN32
 #include <io.h>
@@ -266,4 +269,143 @@ bool CompilerBackend::compile(CompilerKind kind, const CompileRequest& request, 
 int CompilerBackend::run(const std::string& exeFile,
     const std::function<void(const std::string&)>& onOutput) {
     return exitCodeFromStatus(std::system(quoteArg(exeFile).c_str()));
+}
+
+// ===== Incremental, parallel builds =====
+
+std::string CompilerBackend::objectExtension(CompilerKind kind) {
+    return resolve(kind) == CompilerKind::Msvc ? ".obj" : ".o";
+}
+
+std::string CompilerBackend::buildObjectCommand(CompilerKind kind, const std::string& cppFile,
+    const std::string& objFile, const std::string& includeDir, bool optimize) {
+    if (resolve(kind) == CompilerKind::Msvc) {
+        return std::string("cl /c /EHsc /std:c++") + kCppStandard + " " + quoteArgWindows(cppFile) +
+               " /Fo" + quoteArgWindows(objFile) + (optimize ? " /O2" : "") + " /nologo";
+    }
+    std::string command = std::string(resolve(kind) == CompilerKind::Clang ? "clang++ -std=c++" : "g++ -std=c++") +
+                          kCppStandard + " -c " + quoteArg(cppFile) + " -o " + quoteArg(objFile) +
+                          " -iquote " + quoteArg(includeDir);
+    if (optimize) command += " -O2";
+    return command;
+}
+
+std::string CompilerBackend::buildLinkCommand(CompilerKind kind, const std::vector<std::string>& objFiles,
+    const std::string& exeFile, const std::string& linkerFlags) {
+    std::string command;
+    if (resolve(kind) == CompilerKind::Msvc) {
+        command = "cl /nologo";
+        for (const auto& obj : objFiles) command += " " + quoteArgWindows(obj);
+        command += " /Fe" + quoteArgWindows(exeFile);
+        if (!linkerFlags.empty()) command += " " + linkerFlags;
+        return command;
+    }
+    command = resolve(kind) == CompilerKind::Clang ? "clang++" : "g++";
+    for (const auto& obj : objFiles) command += " " + quoteArg(obj);
+    command += " -o " + quoteArg(exeFile);
+    if (!linkerFlags.empty()) command += " " + linkerFlags;
+    return command;
+}
+
+bool CompilerBackend::build(CompilerKind kind, const BuildRequest& request, bool verbose,
+    const std::function<void(const std::string&)>& onOutput, std::vector<bool>& compiled) {
+    const CompilerKind resolved = resolve(kind);
+    compiled.assign(request.units.size(), false);
+    std::error_code ec;
+    std::filesystem::remove(request.exeFile, ec);
+    for (const auto& unit : request.units)
+        if (unit.compile) std::filesystem::remove(unit.objFile, ec);   // judged on this build only
+
+    std::vector<std::string> objects;
+    for (const auto& unit : request.units) objects.push_back(unit.objFile);
+    const std::string link = buildLinkCommand(kind, objects, request.exeFile, request.linkerFlags);
+
+    if (resolved == CompilerKind::Msvc) {
+        // One batch: set up Visual Studio once, compile every stale unit in a single
+        // `cl /MP` call (cl compiles the files of one call in parallel), then link.
+        // Object files are named after their source, in the directory given by /Fo.
+        std::string compile_all;
+        std::map<std::string, std::vector<std::string>> by_dir;   // object directory -> sources
+        for (const auto& unit : request.units) {
+            if (!unit.compile) continue;
+            const std::string dir = std::filesystem::path(unit.objFile).parent_path().string();
+            by_dir[dir].push_back(unit.cppFile);
+        }
+        for (const auto& [dir, sources] : by_dir) {
+            compile_all += "cl /c /MP" + std::to_string(std::max(1u, request.jobs)) + " /EHsc /std:c++" + std::string(kCppStandard);
+            for (const auto& src : sources) compile_all += " " + quoteArgWindows(src);
+            // "dir\\" : a backslash before the closing quote must be doubled for cl's argument parser
+            compile_all += " /Fo\"" + dir + "\\\\\"" + (request.optimize ? " /O2" : "") + " /nologo\r\n"
+                           "if %errorlevel% neq 0 set PYCPP_FAILED=1\r\n";
+        }
+        const std::string batchFile = request.includeDir + "\\build_msvc.bat";
+        {
+            std::ofstream batch(batchFile, std::ios::binary);
+            if (!batch) {
+                if (onOutput) onOutput("Could not create build script: " + batchFile);
+                return false;
+            }
+            batch << "@echo off\r\n"
+                     "set PYCPP_FAILED=0\r\n"
+                     "where cl >nul 2>&1\r\n"
+                     "if %errorlevel% equ 0 goto compile\r\n"
+                     "call \"" << vcVarsPath() << "\" >nul 2>&1\r\n"
+                     "if %errorlevel% neq 0 (\r\n"
+                     "  echo Failed to set up the Visual Studio environment\r\n"
+                     "  exit /b 1\r\n"
+                     ")\r\n"
+                     ":compile\r\n"
+                  << compile_all
+                  << "if %PYCPP_FAILED% neq 0 exit /b 1\r\n"
+                  << link << "\r\n"
+                     "exit /b %errorlevel%\r\n";
+        }
+        if (verbose && onOutput) onOutput("Executing: " + batchFile);
+        const int code = runCommand("cmd /c \"" + batchFile + "\" 2>&1", onOutput);
+        std::filesystem::remove(batchFile, ec);
+        for (size_t i = 0; i < request.units.size(); ++i)
+            compiled[i] = request.units[i].compile && std::filesystem::exists(request.units[i].objFile);
+        return code == 0 && std::filesystem::exists(request.exeFile);
+    }
+
+    // g++ / clang++: up to `jobs` compiler processes at once; each unit's output is kept
+    // together and reported in module order.
+    std::vector<size_t> pending;
+    for (size_t i = 0; i < request.units.size(); ++i) if (request.units[i].compile) pending.push_back(i);
+    std::vector<std::vector<std::string>> logs(request.units.size());
+    std::vector<int> codes(request.units.size(), 0);
+    std::mutex next_mutex;
+    size_t next = 0;
+    auto worker = [&] {
+        while (true) {
+            size_t index;
+            {
+                std::lock_guard<std::mutex> lock(next_mutex);
+                if (next >= pending.size()) return;
+                index = pending[next++];
+            }
+            const BuildUnit& unit = request.units[index];
+            const std::string command = buildObjectCommand(kind, unit.cppFile, unit.objFile, request.includeDir, request.optimize);
+            if (verbose) logs[index].push_back("Executing: " + command);
+            codes[index] = runCommand(command + " 2>&1", [&](const std::string& line) { logs[index].push_back(line); });
+        }
+    };
+    const unsigned workers = std::max(1u, std::min<unsigned>(request.jobs, static_cast<unsigned>(pending.size())));
+    std::vector<std::thread> threads;
+    for (unsigned t = 1; t < workers; ++t) threads.emplace_back(worker);
+    worker();
+    for (auto& t : threads) t.join();
+
+    bool ok = true;
+    for (size_t i = 0; i < request.units.size(); ++i) {
+        if (!request.units[i].compile) continue;
+        if (onOutput) for (const auto& line : logs[i]) onOutput(line);
+        compiled[i] = codes[i] == 0 && std::filesystem::exists(request.units[i].objFile);
+        if (!compiled[i]) ok = false;
+    }
+    if (!ok) return false;
+
+    if (verbose && onOutput) onOutput("Executing: " + link);
+    const int code = runCommand(link + " 2>&1", onOutput);
+    return code == 0 && std::filesystem::exists(request.exeFile);
 }

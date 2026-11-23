@@ -2,6 +2,9 @@
 #include "../include/code_generator.h"
 #include "../include/diagnostics.h"
 #include "../include/header_generator.h"
+#include "../include/builtin_methods.h"
+#include <climits>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <unordered_set>
@@ -91,6 +94,19 @@ bool pycpp::isInheritedMember(const std::string& cls, const std::string& member)
 }
 
 bool& pycpp::lineDirectives() { static bool on = true; return on; }   // [fix2]
+
+bool pycpp::hasMember(const std::string& cls, const std::string& member) {
+    auto& reg = classRegistry();
+    auto it = reg.find(cls);
+    for (int depth = 0; it != reg.end() && depth < 64; ++depth) {
+        if (it->second.members.count(member)) return true;
+        if (it->second.base.empty()) return false;
+        it = reg.find(it->second.base);
+    }
+    return false;
+}
+
+void pycpp::resetClassRegistry() { classRegistry().clear(); }
 
 bool pycpp::hasSubclasses(const std::string& cls) {
     for (auto& entry : classRegistry()) if (entry.second.base == cls) return true;
@@ -365,6 +381,17 @@ static std::string dottedName(Expr* e) {
     return "";
 }
 
+// A list literal that is iterated needs a real container type: {"a", "b"} alone would
+// be an initializer_list of C strings.
+static std::string listLiteralPrefix(Expr* e) {
+    auto list = dynamic_cast<ListLiteral*>(e);
+    if (!list) return "";
+    bool all_strings = !list->elements.empty();
+    for (auto& el : list->elements)
+        if (!dynamic_cast<StringLiteral*>(el.get()) && !dynamic_cast<FString*>(el.get())) all_strings = false;
+    return all_strings ? "std::vector<std::string>" : "std::vector";
+}
+
 // True for `graphics`, `graphics.shapes` or an `as` alias, unless a local variable shadows it.
 bool CodeGenerator::isModuleExpr(Expr* expr) {
     const std::string name = dottedName(expr);
@@ -510,6 +537,19 @@ bool CodeGenerator::usesSelf(Expr* expr) {
         for (auto& kv : dict->items) if (usesSelf(kv.first.get()) || usesSelf(kv.second.get())) return true;
         return false;
     }
+    if (auto fs = dynamic_cast<FString*>(expr)) {
+        for (auto& part : fs->parts) if (usesSelf(part.expr.get())) return true;
+        return false;
+    }
+    if (auto lambda = dynamic_cast<Lambda*>(expr)) return usesSelf(lambda->body.get());
+    if (auto comp = dynamic_cast<Comprehension*>(expr)) {
+        if (usesSelf(comp->element.get()) || usesSelf(comp->value.get())) return true;
+        for (auto& c : comp->clauses) {
+            if (usesSelf(c.iterable.get())) return true;
+            for (auto& cond : c.conditions) if (usesSelf(cond.get())) return true;
+        }
+        return false;
+    }
     return false;
 }
 
@@ -524,6 +564,17 @@ std::string CodeGenerator::formatDouble(double value) {
         if (std::stod(text.str()) == value) break;
     }
     std::string result = text.str();
+    // 40.0 reads better than 4e+01: plain notation for ordinary magnitudes
+    if (result.find_first_of("eE") != std::string::npos && std::isfinite(value) &&
+        std::fabs(value) >= 1e-4 && std::fabs(value) < 1e16) {
+        for (int decimals = 1; decimals <= 17; ++decimals) {
+            std::ostringstream fixed;
+            fixed << std::fixed;
+            fixed.precision(decimals);
+            fixed << value;
+            if (std::stod(fixed.str()) == value) { result = fixed.str(); break; }
+        }
+    }
     if (result.find_first_of(".eEn") == std::string::npos) result += ".0"; // 'n' = nan/inf
     return result;
 }
@@ -851,12 +902,13 @@ void CodeGenerator::generatePrototype(FunctionDef* func) {
 // member initializer list: "self.x: T = expr" or "self.x = expr", where expr does not
 // depend on 'self'. Only a leading run of such statements is taken, so statement
 // order (and therefore any side effects) is unchanged.
-void CodeGenerator::collectConstructorInitializers(FunctionDef* ctor,
+void CodeGenerator::collectConstructorInitializers(FunctionDef* ctor, size_t start,
     std::vector<std::pair<std::string, std::string>>& inits, size_t& consumed_count) {
     std::set<std::string> seen;
     consumed_count = 0;
 
-    for (auto& stmt : ctor->body) {
+    for (size_t index = start; index < ctor->body.size(); ++index) {
+        auto& stmt = ctor->body[index];
         std::string member;
         Expr* value = nullptr;
 
@@ -949,9 +1001,28 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
 
     std::vector<std::pair<std::string, std::string>> inits;
     size_t consumed = 0;
+    size_t super_statements = 0;   // 1 when the body starts with super().__init__(...)
     if (is_constructor) {
-        collectConstructorInitializers(func, inits, consumed);
-        if (current_class && isBuiltinExceptionName(current_class->base_class)) {
+        // super().__init__(args) -> Base(args) at the start of the initializer list
+        std::string base_init;
+        if (!func->body.empty() && current_class && !current_class->base_class.empty()) {
+            if (auto es = dynamic_cast<ExprStmt*>(func->body[0].get())) {
+                auto call = dynamic_cast<CallExpr*>(es->expr.get());
+                auto m = call ? dynamic_cast<MemberAccess*>(call->callee.get()) : nullptr;
+                if (m && m->member == "__init__" && isSuperCall(m->object.get())) {
+                    base_init = "(";
+                    for (size_t i = 0; i < call->arguments.size(); ++i)
+                        base_init += (i ? ", " : "") + exprToString(call->arguments[i].get());
+                    base_init += ")";
+                    super_statements = 1;
+                }
+            }
+        }
+        collectConstructorInitializers(func, super_statements, inits, consumed);
+        if (super_statements) {
+            inits.insert(inits.begin(), { current_class->base_class, base_init.substr(1, base_init.size() - 2) });
+        }
+        else if (current_class && isBuiltinExceptionName(current_class->base_class)) {
             for (const auto& p : func->parameters) {
                 if (p.name == "self" || !p.type) continue;
                 auto basic = dynamic_cast<BasicType*>(p.type.get());
@@ -969,7 +1040,7 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
         }
     }
 
-    const size_t first_body_stmt = consumed;
+    const size_t first_body_stmt = super_statements + consumed;
     if (is_constructor && first_body_stmt >= func->body.size()) {
         output << " {}\n"; // everything went into the initializer list
         popScope();
@@ -1329,6 +1400,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
         output << "/* null expression */";
         return;
     }
+    if (auto comp = dynamic_cast<Comprehension*>(expr)) { generateComprehension(comp); return; }
+    if (auto fs = dynamic_cast<FString*>(expr)) { generateFString(fs); return; }
+    if (auto lambda = dynamic_cast<Lambda*>(expr)) { generateLambda(lambda); return; }
 
     // Handle CallExpr first - using the COMPREHENSIVE approach
     if (auto call_expr = dynamic_cast<CallExpr*>(expr)) {
@@ -1449,7 +1523,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
                 if (i > 0) output << " << ' '";
                 useRuntime();
-                output << " << pycpp::to_str(";
+                output << " << pycpp::to_str(" << listLiteralPrefix(call_expr->arguments[i].get());
                 generateExpression(call_expr->arguments[i].get());
                 output << ")";
             }
@@ -1476,9 +1550,10 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if (function_name == "len") {
             if (call_expr->arguments.size() > 0) {
-                output << "(";
+                // an int, as in Python: len(xs) - 1 must be -1 for an empty list, not a huge size_t
+                output << "static_cast<int>((" << listLiteralPrefix(call_expr->arguments[0].get());
                 generateExpression(call_expr->arguments[0].get());
-                output << ").size()";
+                output << ").size())";
             }
             else {
                 output << "0";
@@ -2040,15 +2115,36 @@ void CodeGenerator::generateExpression(Expr* expr) {
         // Handle member function calls (non-built-in)
         if (auto member_access = dynamic_cast<MemberAccess*>(call_expr->callee.get())) {
             std::string method = member_access->member;
+
+            // super().method(args) -> Base::method(args)
+            if (isSuperCall(member_access->object.get()) && current_class) {
+                output << current_class->base_class << "::"
+                       << (method == "__init__" ? current_class->base_class : method) << "(";
+                for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
+                    if (i > 0) output << ", ";
+                    generateExpression(call_expr->arguments[i].get());
+                }
+                output << ")";
+                return;
+            }
+
+            // Python methods of str/list/dict/set -> runtime helpers with Python semantics.
+            // An object known to be a class keeps its own methods.
+            if (pycpp::isBuiltinMethodName(method) && !isUserObject(member_access->object.get())) {
+                useRuntime();
+                output << "pycpp::py_" << method << "(" << listLiteralPrefix(member_access->object.get());
+                generateExpression(member_access->object.get());
+                for (auto& arg : call_expr->arguments) {
+                    output << ", " << listLiteralPrefix(arg.get());   // a template cannot take a braced list
+                    generateExpression(arg.get());
+                }
+                output << ")";
+                return;
+            }
+
             bool arrow = isPointerExpr(member_access->object.get());   // [fix.py] handles chains too
-            Type* object_type = nullptr;
             if (auto ident = dynamic_cast<Identifier*>(member_access->object.get())) {
                 if (ident->name == "this") arrow = true;
-                object_type = lookupVar(ident->name);
-            }
-            // list.append(x) -> push_back(x). A variable declared as a user class keeps its own method.
-            if (method == "append" && call_expr->arguments.size() == 1 && !dynamic_cast<BasicType*>(object_type)) {
-                method = "push_back";
             }
 
             generateObjectOperand(member_access->object.get());
@@ -2229,8 +2325,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
             // that get parsed as assignments in the constructor body
             if (auto ident = dynamic_cast<Identifier*>(bin_op->left.get())) {
                 // Check if this identifier shadows a member variable
-                if (current_class && current_function &&
-                    (current_function->name == "__init__" || current_function->name.find("__init__") != std::string::npos)) {
+                if (current_class && current_function && current_function->name == "__init__" &&
+                    !lookupVar(ident->name) && pycpp::hasMember(current_class->name, ident->name)) {
                     // In constructor context, check if this might be a member assignment
                     // This is a heuristic - we assume parameter names might shadow member names
                     output << "this->" << ident->name << " = ";
@@ -2274,7 +2370,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
     }
     else if (auto int_lit = dynamic_cast<IntLiteral*>(expr)) {
-        output << int_lit->value;
+        output << intLiteralText(int_lit->value);
     }
     else if (auto float_lit = dynamic_cast<FloatLiteral*>(expr)) {
         output << formatDouble(float_lit->value);
@@ -2615,6 +2711,7 @@ void CodeGenerator::visit(ForStmt& node) {
     else {
         output << getIndent() << "for (auto& " << node.var_name << " : ";
         if (node.iterable) {
+            output << listLiteralPrefix(node.iterable.get());
             generateExpression(node.iterable.get());
         }
     }
@@ -2654,7 +2751,7 @@ void CodeGenerator::visit(Block& node) {
 }
 
 void CodeGenerator::visit(IntLiteral& node) {
-    output << node.value;
+    output << intLiteralText(node.value);
 }
 
 void CodeGenerator::visit(FloatLiteral& node) {
@@ -2951,4 +3048,161 @@ void CodeGenerator::visit(MatchStmt& node) {
     }
     dedent();
     output << getIndent() << "}\n";
+}
+
+// ===== New expression kinds =====
+
+
+std::string CodeGenerator::intLiteralText(long long value) {
+    if (value == LLONG_MIN) return "(-9223372036854775807LL - 1)";
+    if (value > INT_MAX || value < INT_MIN) return std::to_string(value) + "LL";
+    return std::to_string(value);
+}
+
+bool CodeGenerator::isSuperCall(Expr* expr) {
+    auto call = dynamic_cast<CallExpr*>(expr);
+    if (!call || call->is_subscript || !call->arguments.empty()) return false;
+    auto id = dynamic_cast<Identifier*>(call->callee.get());
+    return id && id->name == "super" && !lookupVar("super");
+}
+
+// The object is known to be a class instance (or a pointer), so `obj.pop()` is its own
+// method rather than Python's list.pop.
+bool CodeGenerator::isUserObject(Expr* expr) {
+    if (auto id = dynamic_cast<Identifier*>(expr); id && (id->name == "self" || id->name == "this") && current_class)
+        return true;
+    if (isModuleExpr(expr)) return true;
+    TypeInfo info = exprTypeInfo(expr);
+    if (!info.known) return false;
+    if (info.ptr > 0) return true;
+    if (info.cls.empty() || info.cls == "auto" || info.cls == "str" || info.cls == "std::string") return false;
+    return info.cls.rfind("std::", 0) != 0;
+}
+
+// [elem for v in it if c ...]  ->  an immediately-invoked lambda that fills a container.
+// The element type is taken from the element expression itself: a never-called "probe"
+// lambda returns it from inside the same loops, and decltype() of a call to the probe
+// gives its type. This works for any element type, including ones from C++ headers.
+void CodeGenerator::generateComprehension(Comprehension* comp) {
+    useRuntime();   // <cstdlib> for std::abort, <type_traits>
+    const std::string capture = lambdaCapture();
+
+    pushScope();
+    std::vector<std::string> loop_heads;
+    for (auto& clause : comp->clauses) {
+        Expr* iterable = clause.iterable.get();
+        // for k, v in d.items(): iterate the map itself (its items are key/value pairs)
+        if (clause.var_names.size() > 1) {
+            if (auto call = dynamic_cast<CallExpr*>(iterable))
+                if (auto member = dynamic_cast<MemberAccess*>(call->callee.get()))
+                    if (member->member == "items" && call->arguments.empty() && !isUserObject(member->object.get()))
+                        iterable = member->object.get();
+        }
+        Type* elem_type = nullptr;
+        if (clause.var_names.size() == 1) {
+            TypeInfo info = exprTypeInfo(iterable);
+            if (info.known && info.elem) elem_type = info.elem;
+        }
+        std::string head = "for (auto&& ";
+        if (clause.var_names.size() == 1) head += clause.var_names[0];
+        else {
+            head += "[";
+            for (size_t i = 0; i < clause.var_names.size(); ++i) head += (i ? ", " : "") + clause.var_names[i];
+            head += "]";
+        }
+        head += " : " + listLiteralPrefix(iterable) + exprToString(iterable) + ")";
+        loop_heads.push_back(head);
+        for (const auto& v : clause.var_names) declareVar(v, elem_type);
+    }
+
+    const std::string element = exprToString(comp->element.get());
+    const std::string value = comp->value ? exprToString(comp->value.get()) : "";
+    std::vector<std::string> conditions;
+    for (auto& clause : comp->clauses) {
+        std::string c;
+        for (auto& cond : clause.conditions) c += (c.empty() ? "" : " && ") + std::string("(") + exprToString(cond.get()) + ")";
+        conditions.push_back(c);
+    }
+    popScope();
+
+    std::string probe_loops, fill_loops, closing;
+    for (size_t i = 0; i < loop_heads.size(); ++i) {
+        probe_loops += loop_heads[i] + " { ";
+        fill_loops += loop_heads[i] + " { ";
+        if (!conditions[i].empty()) { fill_loops += "if (" + conditions[i] + ") { "; closing += "} "; }
+        closing += "} ";
+    }
+    std::string probe_closing;
+    for (size_t i = 0; i < loop_heads.size(); ++i) probe_closing += "} ";
+
+    output << capture << "() { ";
+    // The analyzer's element type, when it knows one, so the container has exactly the
+    // type a declaration of it expects; otherwise the probe's.
+    auto known = [](const std::string& t) { return !t.empty() && t.find("auto") == std::string::npos; };
+    if (comp->kind == Comprehension::Kind::Dict) {
+        if (known(comp->element_type) && known(comp->value_type)) {
+            output << "std::map<" << comp->element_type << ", " << comp->value_type << "> pycpp_r; ";
+        }
+        else {
+            output << "auto pycpp_probe = " << capture << "() { " << probe_loops
+                   << "return std::make_pair(" << element << ", " << value << "); " << probe_closing << "std::abort(); }; "
+                   << "using pycpp_kv = decltype(pycpp_probe()); "
+                   << "std::map<typename pycpp_kv::first_type, typename pycpp_kv::second_type> pycpp_r; ";
+        }
+        output << fill_loops << "pycpp_r.insert_or_assign(" << element << ", " << value << "); " << closing;
+    }
+    else {
+        const char* container = comp->kind == Comprehension::Kind::Set ? "std::set" : "std::vector";
+        const char* add = comp->kind == Comprehension::Kind::Set ? "insert" : "push_back";
+        if (known(comp->element_type)) {
+            output << container << "<" << comp->element_type << "> pycpp_r; ";
+        }
+        else {
+            output << "auto pycpp_probe = " << capture << "() { " << probe_loops
+                   << "return " << element << "; " << probe_closing << "std::abort(); }; "
+                   << container << "<std::decay_t<decltype(pycpp_probe())>> pycpp_r; ";
+        }
+        output << fill_loops << "pycpp_r." << add << "(" << element << "); " << closing;
+    }
+    output << "return pycpp_r; }()";
+}
+
+// f"a {x:.2f} b"  ->  (std::string("a ") + pycpp::format_spec(x, ".2f") + " b")
+void CodeGenerator::generateFString(FString* fs) {
+    require("string");
+    output << "(std::string()";
+    for (auto& part : fs->parts) {
+        output << " + ";
+        if (!part.expr) {
+            output << "std::string(\"" << cppEscape(part.text) << "\")";
+            continue;
+        }
+        useRuntime();
+        if (!part.debug_text.empty()) output << "std::string(\"" << cppEscape(part.debug_text) << "\") + ";
+        const std::string value = exprToString(part.expr.get());
+        std::string text = part.conversion == 'r' ? "pycpp::to_repr(" + value + ")" : value;
+        if (!part.spec.empty()) output << "pycpp::format_spec(" << text << ", \"" << cppEscape(part.spec) << "\")";
+        else if (part.conversion == 'r') output << text;
+        else output << "pycpp::to_str(" << value << ")";
+    }
+    output << ")";
+}
+
+// lambda a, b: a + b  ->  [&](auto a, auto b) { return (a + b); }
+// A lambda that is returned or stored in a member outlives the variables around it, so
+// it captures by copy instead.
+void CodeGenerator::generateLambda(Lambda* lambda) {
+    std::string capture = "[&]";
+    if (!current_function) capture = "[]";
+    else if (lambda->by_value) capture = current_class ? "[=, this]" : "[=]";
+    output << capture << "(";
+    pushScope();
+    for (size_t i = 0; i < lambda->params.size(); ++i) {
+        output << (i ? ", " : "") << "auto " << lambda->params[i];
+        declareVar(lambda->params[i], nullptr);
+    }
+    output << ") { return ";
+    generateExpression(lambda->body.get());
+    output << "; }";
+    popScope();
 }

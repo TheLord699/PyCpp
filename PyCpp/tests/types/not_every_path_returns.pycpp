@@ -1,0 +1,33 @@
+# expect-exit: 0
+# expect-stderr: warning[W0003]: not every path through 'grade' returns a value
+# expect-no-stderr: 'full'
+# expect-no-stderr: 'forever'
+# expect-no-stderr: 'fails'
+# expect-stdout: B
+def grade(score: int) -> str:
+    if score > 90:
+        return "A"
+    elif score > 50:
+        return "B"
+
+def full(score: int) -> str:
+    if score > 90:
+        return "A"
+    else:
+        return "B"
+
+def forever(n: int) -> int:
+    while True:
+        if n > 10:
+            return n
+        n += 1
+
+def fails(n: int) -> int:
+    if n > 0:
+        return n
+    raise ValueError("negative")
+
+def main() -> int:
+    print(grade(60))
+    print(full(1), forever(1), fails(1))
+    return 0

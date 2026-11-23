@@ -1,0 +1,11 @@
+# expect-exit: 1
+# expect-stderr: error[E0114]: cannot infer the type of 'items' from an empty or untyped collection
+# expect-stderr: declare its type: `items: list[int] = []`
+# expect-stderr: error[E0114]: cannot infer the type of 'nothing'
+def helper() -> void:
+    pass
+
+def main() -> int:
+    items = []
+    nothing = helper()
+    return 0

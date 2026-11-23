@@ -1,0 +1,15 @@
+# expect-exit: 0
+# expect-stdout: name=Ann age=7 next=8
+# expect-stdout: [  3.14] [3.1416] [0042] [ff] [0xff] [1,234,567] [left  ] [ right] [ mid  ] [12.5%]
+# expect-stdout: {literal} 'quoted' value=5
+# expect-stdout: [True] [2.5] [1e-05]
+def main() -> int:
+    name = "Ann"
+    age = 7
+    print(f"name={name} age={age} next={age + 1}")
+    pi = 3.14159
+    print(f"[{pi:6.2f}] [{pi:.4f}] [{42:04d}] [{255:x}] [{255:#x}] [{1234567:,}] [{'left':<6}] [{'right':>6}] [{'mid':^6}] [{0.125:.1%}]")
+    value = 5
+    print(f"{{literal}} {'quoted'!r} {value=}")
+    print(f"[{True}] [{2.5}] [{0.00001}]")
+    return 0

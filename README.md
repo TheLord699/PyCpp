@@ -179,6 +179,12 @@ Supported syntax:
 - Python arithmetic: `/` is true division (`7 / 2` is `3.5`), `//` floors (`-7 // 2` is `-4`), `%` takes the sign of the divisor, and `**` on integers stays an integer. Dividing by zero stops the program with `ZeroDivisionError`.
 - `print()` writes Python-style text: `True` / `False`, floats such as `3.0` and `0.1`, and `[1, 2]` / `{'a': 1}` for containers.
 - `list()`, `dict()` and `set()` create empty collections, typed by the declaration: `d: dict[str, int] = dict()`.
+- f-strings with Python's format specs: `f"{name!r:>10} {price:8.2f} {count:,} {flags:#x} {ratio:.1%} {total=}"`. `{{` and `}}` are literal braces.
+- Comprehensions: `[x * x for x in xs if x > 0]`, `{k: len(k) for k in words}`, `{n % 3 for n in nums}`, nested `for` clauses, and generator expressions passed to a call: `sum(x * x for x in xs)`.
+- `lambda a, b: a + b` (captures by reference; a lambda that is returned or stored in a member captures by copy).
+- Python methods of `str`, `list`, `dict` and `set` (`s.upper()`, `line.split(",")`, `"-".join(words)`, `xs.pop()`, `d.get(k, 0)`, ...), see [Collections](#9-collections).
+- `super()`: `super().__init__(...)` (as the first statement of `__init__`) and `super().method(...)`, see [Classes](#7-classes-and-object-oriented-programming).
+- `with`, `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
 - `pycpp` exits with the exit code of the program it ran.
 - Exceptions: `try` / `except` / `else` / `finally` and `raise`.
   ```
@@ -211,7 +217,7 @@ The compiler automatically handles C++ syntax generation.
 
 PyCPP is fully statically typed.
 
-Every variable, function parameter, and return type must have an explicitly declared type.
+Every function parameter and return type has an explicitly declared type. A local variable can be declared with a type (`count: int = 0`) or, as in Python, just assigned (`count = 0`), in which case it gets the type of its value (see [Type inference](#type-inference)).
 
 Supported types:
 
@@ -233,12 +239,39 @@ Additional types:
 
 - `list[T]` — `std::vector<T>`.
 - `dict[K, V]` — `std::map<K, V>`.
+- `set[T]` — `std::set<T>`.
 - `*T` — pointer to T.
 - `&T` — reference to T.
 
 Type safety is enforced at compile time. Initialising a variable, assigning, or returning a value of an incompatible type is a **compile error** and stops the build. Arithmetic types convert implicitly, exactly as in C++. Suspicious-but-legal code (for example a mismatched operator) produces a warning and does not stop the build.
 
-Type inference may be introduced in a future version.
+Integer literals are 64-bit: a literal that fits in `int` has type `int`, a larger one (up to `9223372036854775807`) has type `i64`. Storing a literal that does not fit (`x: int = 3000000000`) is an error.
+
+### Type inference
+
+Inside a function, assigning to a name that is not declared yet declares it, with the type of the value:
+
+```
+def main() -> int:
+    count = 0                 # int
+    ratio = 7 / 2             # double (true division)
+    name = "Ann"              # str
+    scores = [90, 85]         # list[int]
+    ages = {"Ann": 31}        # dict[str, int]
+    player = Player("Ann")    # Player
+    count = "many"            # error[E0104]: mismatched types: expected int, found str
+    return 0
+```
+
+The variable is visible in the block it was first assigned in, like a declared one; a variable first assigned inside an `if` is not visible after it (the error says where it was declared). Values without an element type, such as `[]`, `{}`, `list()` or `None`, cannot be inferred: declare those (`items: list[int] = []`).
+
+### What is checked
+
+- Calls of functions, methods and constructors (`Player("Ann")` against `Player.__init__`): the number of arguments and their types, including calls into imported modules (modules are analysed after the modules they import).
+- Calls of methods that do not exist on a class, or on `str`/`list`/`dict`/`set` (`name.uper()` suggests `upper`).
+- The return type of methods, so `label: str = account.deposit(5)` is an error when `deposit` returns `int`.
+- That every path through a function with a return type returns a value (`W0003`). Paths that end in `raise`, `exit()`, or a `while True:` loop without `break` need no return.
+- True division where an integer is expected (`W0008`): `/` always produces a float, so `half: int = n / 2`, `return n / 2` from an `int` function, passing `n / 2` to an `int` parameter, `xs[n / 2]` and `x /= 2` on an integer warn. Use `//`.
 
 # **4. Function Argument System**
 
@@ -396,7 +429,6 @@ Supported:
 
 Future enhancements:
 
-- `super()` for custom exception classes.
 - Additional iteration utilities.
 
 # **7. Classes and Object-Oriented Programming**
@@ -432,6 +464,30 @@ Features:
 - Inheritance.
 - Native C++ class generation.
 - Automatic header management.
+
+### Calling the base class: `super()`
+
+`super().__init__(...)` constructs the base class. It must be the first statement of `__init__` (C++ builds the base before the derived class), and its arguments cannot use `self`. `super().method(...)` calls the base class's version of a method.
+
+```
+class Entity:
+    def __init__(self, pos: Vec2, size: float):
+        self.pos: Vec2 = pos
+        self.size: float = size
+
+    def describe(self) -> str:
+        return "entity"
+
+class Player(Entity):
+    def __init__(self, start: Vec2):
+        super().__init__(start, 40.0)        # -> Player(Vec2 start) : Entity(start, 40.0)
+        self.speed: float = 6.0
+
+    def describe(self) -> str:
+        return "player, an " + super().describe()   # -> Entity::describe()
+```
+
+It works the same for exception classes: `class AppError(Exception)` can call `super().__init__(message)`.
 
 ### **7.1 High-level vs low-level: what the compiler generates**
 
@@ -650,6 +706,26 @@ for name, health in players.items():
     print(name, health)
 ```
 
+Comprehensions build collections in one expression:
+
+```
+evens = [n for n in numbers if n % 2 == 0]
+lengths = {name: len(name) for name in names}
+```
+
+### Methods of `str`, `list`, `dict` and `set`
+
+These have Python's behaviour (a user class that defines a method with the same name keeps its own):
+
+| Type   | Methods |
+| ------ | ------- |
+| `str`  | `upper` `lower` `strip` `lstrip` `rstrip` `split` `rsplit` `splitlines` `join` `replace` `find` `rfind` `index` `count` `startswith` `endswith` `isdigit` `isalpha` `isalnum` `isspace` `isupper` `islower` `title` `capitalize` `swapcase` `center` `ljust` `rjust` `zfill` |
+| `list` | `append` `extend` `insert` `pop` `remove` `index` `count` `clear` `sort` `reverse` `copy` |
+| `dict` | `get` `keys` `values` `items` `pop` `update` `clear` `copy` `setdefault` |
+| `set`  | `add` `remove` `discard` `clear` `copy` |
+
+`xs.pop()` on an empty list raises `IndexError`, `xs.remove(x)` and `s.index(sub)` raise `ValueError` when nothing is found, and `d.pop(k)` raises `KeyError` for a missing key, as in Python. `d.get(k)` without a default returns the value type's default (`0`, `""`, ...) where Python returns `None`. The C++ members of these types (`size()`, `push_back()`, ...) remain available.
+
 The compiler automatically detects required standard library headers.
 
 # **10. Templates**
@@ -800,7 +876,16 @@ $ pycpp main.pycpp
 80
 
 $ pycpp bad.pycpp
-error: line 3:5: syntax error: Expected expression, got: 'return'
+error[E0101]: cannot find 'scor' in this scope
+ --> bad.pycpp:3:5
+  |
+2 |     score: int = 0
+3 |     scor += 1
+  |     ^^^^
+  |
+  = help: a similar name exists, did you mean 'score'?
+
+error: could not compile due to 1 error
 ```
 
 | Option          | Effect                                                                  |
@@ -808,8 +893,32 @@ error: line 3:5: syntax error: Expected expression, got: 'return'
 | `-v`, `--verbose` | Show the compiler's progress, the exact compile command, and the lexer/parser/analyzer trace. |
 | `--keep-temp`   | Keep the generated `.h`/`.cpp` files and the executable in `temp/`.     |
 | `--no-compile`  | Generate the `.h` and `.cpp` files only.                                |
+| `check`, `--check` | Parse and analyse every module, report problems, and stop: `pycpp check main.pycpp`. No C++ is generated or compiled. |
+| `--watch`       | Run (or check) again every time one of the program's source files changes. Stop with Ctrl+C. |
+| `--error-format <f>` | `human` (default), `short` (`file:line:col: error[E0101]: message`, one per line) or `json` (one object per line). |
+| `--explain <code>` | Describe a diagnostic code: `pycpp --explain E0101`.                 |
+| `-j <n>`, `--jobs <n>` | Compile up to n modules at once (default: one per CPU core).     |
+| `--no-cache`    | Recompile every module instead of reusing unchanged ones.               |
 
 Syntax errors and type errors stop the build. The parser never skips a statement it cannot understand.
+
+### **15.3 Incremental and parallel builds**
+
+Each module is compiled to its own object file, and object files are kept in `temp/.cache/` next to the entry file. A module is recompiled only when its generated C++, a generated header it includes, or the compile command (compiler, `--build`) changed, so editing one function body of a large program recompiles one module. Changing what a module exports (a class, a function signature) also recompiles the modules that import it. Modules that do need compiling are compiled in parallel (`-j`). With MSVC, all of them are passed to one `cl /MP` call, so the Visual Studio environment is set up only once.
+
+`temp/.cache/` is safe to delete at any time; `--no-cache` ignores it.
+
+### **15.4 Editor integration**
+
+`pycpp check file.pycpp --error-format=short` prints one line per problem in the format most editors understand. `.vscode/tasks.json` contains three tasks built on it: **pycpp: check current file** (the default build task, Ctrl+Shift+B), **pycpp: watch current file** (re-checks on every save), and **pycpp: run current file**. Their problem matcher underlines errors and warnings in the editor and lists them in the Problems panel.
+
+For tools and extensions, `--error-format=json` prints one JSON object per line on stderr:
+
+```
+{"file":"/src/game.pycpp","line":12,"column":9,"end_line":12,"end_column":13,"severity":"error","code":"E0101","name":"unknown-name","label":"","hint":"did you mean 'score'?","notes":[],"message":"cannot find 'scor' in this scope"}
+```
+
+`end_column` is exclusive. `"message"` is always the last key.
 
 ## Examples and recently demonstrated syntax
 
@@ -905,14 +1014,40 @@ offending token, a label, notes and a `help:` line. One run reports as many inde
 summary (`could not compile due to 2 errors; 1 warning emitted`). Set `NO_COLOR=1` to disable colours.
 
 Compile-time checks include: unknown names and types (with "did you mean"), wrong argument counts and types in calls to
-your own functions, statements outside functions, a missing `main`, unused variables, unreachable code, and float values
-stored in integer variables. The generated C++ carries `#line` directives, so if the C++ compiler still rejects
-something, the error is shown against the PyCPP line that produced it.
+your own functions, methods and constructors, unknown methods, statements outside functions, a missing `main`, unused
+variables, unreachable code, functions that can end without returning, and floats or true divisions stored in integers.
+The generated C++ carries `#line` directives, so if the C++ compiler still rejects something, the error is shown against
+the PyCPP line that produced it.
+
+The carets underline the whole construct a diagnostic is about: all of `total / count`, not just its last token; an
+unterminated string is underlined to the end of the line. Errors and warnings are printed together, sorted by file, line
+and column.
+
+**Diagnostic codes.** Every error and warning has a stable code (`error[E0101]`, `warning[W0001]`), so each one can be
+documented, searched for and tested precisely. `pycpp --explain E0101` describes a code; the full list is in
+[`PyCpp/docs/error-codes.md`](PyCpp/docs/error-codes.md). Codes `E00xx` are syntax errors, `E01xx` name and type
+errors, `E02xx` module and build errors, `E03xx` command-line errors, and `Wxxxx` warnings.
+
+**Silencing a warning.** A `# allow:` comment silences warnings on its line, by name or code; on a comment line of its
+own it applies to the next line. Errors cannot be silenced.
+
+```
+scratch: int = compute()       # allow: unused
+# allow: division
+pixels: int = width / 2
+legacy: int = 1                # allow: W0001, W0008
+```
+
+Warning names: `unused` (W0001), `unreachable` (W0002), `missing-return` (W0003), `float-to-int` (W0004),
+`mismatched-operands` (W0005), `no-member` (W0006), `unknown-exception` (W0007), `division` (W0008), `index-type`
+(W0009); `all` silences every warning on the line.
 
 `list[i]` is bounds-checked: negative indices count from the end and an out-of-range index raises `IndexError`.
 
-Regression tests live in `PyCpp/tests/` (`errors`, `warnings`, `crashes`, `regressions`). Each case declares what it
-expects in leading comments (`# expect-exit: 1`, `# expect-stderr: ...`). Run them with:
+Regression tests live in `PyCpp/tests/` (`errors`, `warnings`, `crashes`, `regressions`, `diagnostics`, `language`,
+`types`, `tooling`, `modules`). Each case declares what it expects in leading comments (`# expect-exit: 1`,
+`# expect-stderr: error[E0101]`, `# expect-stderr-sequence: ...` for output that must appear in order, `# runs: 2` to
+run a case twice). Run them with:
 
 ```
 python PyCpp/tests/run_tests.py                  # everything

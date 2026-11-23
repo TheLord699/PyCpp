@@ -1,0 +1,16 @@
+# expect-exit: 1
+# expect-stderr: error[E0107]: mismatched types: argument 1 of method 'Account.deposit' expects int, found str
+# expect-stderr: error[E0104]: mismatched types: 'label' is str, but the value is int
+class Account:
+    def __init__(self):
+        self.balance: int = 0
+
+    def deposit(self, amount: int) -> int:
+        self.balance += amount
+        return self.balance
+
+def main() -> int:
+    a = Account()
+    a.deposit("ten")
+    label: str = a.deposit(5)
+    return 0

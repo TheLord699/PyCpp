@@ -4,11 +4,7 @@ from vec2 import Vec2
 
 class Player(Entity):
     def __init__(self, start_pos: Vec2):
-        # Call the parent constructor manually (PyCPP doesn't have super() yet)
-        self.pos: Vec2 = start_pos
-        self.size: float = 40.0
-        self.color: Color = BLUE
-        self.active: bool = true
+        super().__init__(start_pos, 40.0, BLUE)
         self.speed: float = 6.0
         self.shoot_cooldown: float = 0.0
 

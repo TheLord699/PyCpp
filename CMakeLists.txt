@@ -36,6 +36,10 @@ add_executable(PyCpp
 # Include directories
 target_include_directories(PyCpp PRIVATE "PyCpp/include")
 
+# Modules are compiled in parallel (std::thread)
+find_package(Threads REQUIRED)
+target_link_libraries(PyCpp PRIVATE Threads::Threads)
+
 # --- ADDED FOR STATIC LINKING (Fixes the missing libstdc++-6.dll error) ---
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_options(PyCpp PRIVATE -static-libgcc -static-libstdc++ -static)

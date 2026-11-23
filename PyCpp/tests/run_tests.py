@@ -12,7 +12,10 @@
 #   # expect-stdout: text       stdout must contain text           (repeatable)
 #   # expect-no-stderr: text    stderr must NOT contain text       (repeatable)
 #   # expect-no-stdout: text    stdout must NOT contain text       (repeatable)
+#   # expect-stderr-sequence: t stderr must contain these texts in this order (repeatable)
 #   # args: --keep-temp         extra command line arguments
+#   # runs: 2                   run the case this many times; the last run is checked
+#   #                           (the object cache is shared between the runs)
 #   # timeout: 60               seconds before the case is killed
 import argparse
 import os
@@ -24,7 +27,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DIRECTIVE = re.compile(r'^#\s*(expect-exit|expect-stderr|expect-stdout|expect-no-stderr|expect-no-stdout|args|timeout):\s*(.*?)\s*$')
+DIRECTIVE = re.compile(r'^#\s*(expect-exit|expect-stderr-sequence|expect-stderr|expect-stdout|expect-no-stderr|expect-no-stdout|args|runs|timeout):\s*(.*?)\s*$')
 
 
 def find_pycpp(explicit):
@@ -44,7 +47,8 @@ def find_pycpp(explicit):
 
 
 def parse_case(path):
-    exp = {'exit': 0, 'stderr': [], 'stdout': [], 'no-stderr': [], 'no-stdout': [], 'args': [], 'timeout': 60}
+    exp = {'exit': 0, 'stderr': [], 'stdout': [], 'no-stderr': [], 'no-stdout': [], 'stderr-sequence': [],
+           'args': [], 'runs': 1, 'timeout': 60}
     for line in path.read_text(encoding='utf-8').splitlines()[:40]:
         m = DIRECTIVE.match(line)
         if not m:
@@ -56,6 +60,8 @@ def parse_case(path):
             exp['args'] = value.split()
         elif key == 'timeout':
             exp['timeout'] = int(value)
+        elif key == 'runs':
+            exp['runs'] = int(value)
         else:
             exp[key].append(value)
     return exp
@@ -69,8 +75,9 @@ def run_case(path, pycpp, compiler):
     had_temp = temp.exists()
     start = time.time()
     try:
-        proc = subprocess.run(cmd, cwd=str(path.parent), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', timeout=exp['timeout'], env=env)
+        for _ in range(exp['runs']):
+            proc = subprocess.run(cmd, cwd=str(path.parent), capture_output=True, text=True,
+                                  encoding='utf-8', errors='replace', timeout=exp['timeout'], env=env)
     except subprocess.TimeoutExpired:
         return False, ['timed out after %d s' % exp['timeout']], '', '', time.time() - start
     elapsed = time.time() - start
@@ -93,6 +100,13 @@ def run_case(path, pycpp, compiler):
     for text in exp['no-stdout']:
         if text in proc.stdout:
             problems.append('stdout must not contain: ' + text)
+    position = 0
+    for text in exp['stderr-sequence']:
+        found = proc.stderr.find(text, position)
+        if found < 0:
+            problems.append('stderr does not contain, in this order: ' + text)
+            break
+        position = found + len(text)
     if temp.exists() and not had_temp:
         shutil.rmtree(temp, ignore_errors=True)
     return not problems, problems, proc.stdout, proc.stderr, elapsed

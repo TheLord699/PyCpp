@@ -1,0 +1,8 @@
+# expect-exit: 0
+# args: --check
+# expect-stderr: checked 1 file: no errors, 1 warning
+# expect-no-stdout: should not run
+def main() -> int:
+    unused: int = 1
+    print("should not run")
+    return 0

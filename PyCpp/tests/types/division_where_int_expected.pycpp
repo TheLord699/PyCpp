@@ -1,0 +1,28 @@
+# expect-exit: 0
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when stored in 'a' (int)
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when assigned to an integer
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when returned from a function that returns int
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when passed to the int parameter 'n'
+# expect-stderr: warning[W0008]: '/' always produces a float, which is truncated when used as a list index
+# expect-stderr: warning[W0008]: '/=' on an integer truncates the result
+# expect-no-stderr: 'ok_float'
+# expect-no-stderr: :25:
+# expect-no-stderr: :26:
+def halve(n: int) -> int:
+    return n / 2
+
+def show(n: int) -> void:
+    print(n)
+
+def main() -> int:
+    a: int = 7 / 2
+    b: int = 0
+    b = a / 2
+    show(b / 3)
+    xs: list[int] = [1, 2, 3]
+    print(xs[3 / 2])
+    a /= 2
+    ok_float: float = 7 / 2
+    c: int = 7 // 2
+    print(a, b, c, ok_float, halve(9))
+    return 0

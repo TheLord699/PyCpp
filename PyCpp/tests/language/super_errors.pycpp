@@ -1,0 +1,18 @@
+# expect-exit: 1
+# expect-stderr: error[E0113]: class 'Plain' has no base class, so super() has nothing to refer to
+# expect-stderr: error[E0113]: super().__init__() must be the first statement of __init__
+class Base:
+    def __init__(self, n: int):
+        self.n: int = n
+
+class Plain:
+    def hello(self) -> void:
+        super().hello()
+
+class Late(Base):
+    def __init__(self):
+        print("first")
+        super().__init__(1)
+
+def main() -> int:
+    return 0

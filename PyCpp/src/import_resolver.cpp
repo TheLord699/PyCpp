@@ -50,6 +50,7 @@ static std::vector<pycpp::Diagnostic>& missingModules() {
 
 static void reportMissingModule(const std::string& file, const std::string& module) {
     pycpp::Diagnostic d;
+    d.code = "E0201";
     d.message = "cannot find module '" + module + "'";
     d.file = file;
     std::ifstream in(file);

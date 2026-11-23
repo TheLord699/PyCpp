@@ -1,0 +1,28 @@
+# expect-exit: 1
+# expect-stdout: [1, 2, 3] 4
+# expect-stdout: [0, 1, 2, 3, 9] 2 1
+# expect-stdout: [9, 3, 2, 1, 0]
+# expect-stdout: 1 0 ['a', 'b'] [1, 2] 2 {'a': 1}
+# expect-stdout: {1, 3} True
+# expect-stderr: IndexError: pop from empty list
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    xs.append(4)
+    last = xs.pop()
+    print(xs, last)
+    xs.insert(0, 0)
+    xs.extend([9])
+    print(xs, xs.index(2), xs.count(3))
+    xs.sort()
+    xs.reverse()
+    print(xs)
+    d: dict[str, int] = {"a": 1, "b": 2}
+    print(d.get("a"), d.get("zz", 0), d.keys(), d.values(), d.pop("b"), d)
+    s: set[int] = set()
+    s.add(1)
+    s.add(3)
+    s.discard(2)
+    print(s, 3 in s)
+    empty: list[int] = []
+    empty.pop()
+    return 0

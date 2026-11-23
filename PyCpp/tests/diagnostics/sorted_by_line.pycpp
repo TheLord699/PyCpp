@@ -1,0 +1,12 @@
+# expect-exit: 1
+# expect-stderr-sequence: warning[W0001]: unused variable 'a'
+# expect-stderr-sequence: error[E0101]: cannot find 'missing_one'
+# expect-stderr-sequence: warning[W0001]: unused variable 'b'
+# expect-stderr-sequence: error[E0101]: cannot find 'missing_two'
+# expect-stderr-sequence: could not compile due to 2 errors; 2 warnings emitted
+def main() -> int:
+    a: int = 1
+    print(missing_one)
+    b: int = 2
+    print(missing_two)
+    return 0

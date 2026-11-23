@@ -1,0 +1,7 @@
+# expect-exit: 0
+# args: -v -j 3
+# expect-stdout: 3 jobs)
+# expect-stdout: parallel ok
+def main() -> int:
+    print("parallel ok")
+    return 0

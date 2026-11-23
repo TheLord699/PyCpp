@@ -2,11 +2,11 @@ use <raylib.h>
 from vec2 import Vec2
 
 class Entity:
-    def __init__(self):
-        self.pos: Vec2 = Vec2(0.0, 0.0)
-        self.size: float = 0.0
-        self.color: Color = BLACK
-        self.active: bool = false
+    def __init__(self, pos: Vec2, size: float, color: Color):
+        self.pos: Vec2 = pos
+        self.size: float = size
+        self.color: Color = color
+        self.active: bool = true
 
     def update(self, delta: float) -> void:
         pass

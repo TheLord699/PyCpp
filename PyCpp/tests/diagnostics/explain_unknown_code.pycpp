@@ -1,0 +1,5 @@
+# expect-exit: 1
+# args: --explain E9999
+# expect-stderr: error[E0301]: no diagnostic has the code 'E9999'
+def main() -> int:
+    return 0

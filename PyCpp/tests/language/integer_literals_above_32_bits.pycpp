@@ -1,0 +1,8 @@
+# expect-exit: 0
+# expect-stdout: 3000000000 -9223372036854775808 9223372036854775807 255 6000000000
+def main() -> int:
+    big = 3000000000
+    smallest: i64 = -9223372036854775808
+    largest: i64 = 9223372036854775807
+    print(big, smallest, largest, 0xFF, big * 2)
+    return 0

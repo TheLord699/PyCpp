@@ -52,9 +52,34 @@ class ASTNode {
 public:
     int line = 0;
     int column = 0;
+    // Source range of the whole construct: from (span_line, span_column) up to, but not
+    // including, (span_end_line, span_end_column). 0 when unknown. `line`/`column` keep
+    // their historical meaning (for an operator, the operator's position).
+    int span_line = 0, span_column = 0;
+    int span_end_line = 0, span_end_column = 0;
     virtual ~ASTNode() = default;
     virtual void accept(ASTVisitor& visitor) = 0;
 };
+
+// Where a diagnostic about a node should point: the start of its span and how many
+// characters to underline on that line (the rest of the line if the span continues).
+struct SourceSpan { int line = 0; int column = 0; int length = 1; };
+inline SourceSpan spanOf(const ASTNode* node) {
+    SourceSpan s;
+    if (!node) return s;
+    if (node->span_line > 0) {
+        s.line = node->span_line;
+        s.column = node->span_column;
+        if (node->span_end_line == node->span_line && node->span_end_column > node->span_column)
+            s.length = node->span_end_column - node->span_column;
+        else if (node->span_end_line > node->span_line)
+            s.length = 1 << 20;   // runs past this line: underline to its end
+        return s;
+    }
+    s.line = node->line;
+    s.column = node->column;
+    return s;
+}
 
 // Base Type
 class Type : public ASTNode {
@@ -95,7 +120,7 @@ class Expr : public ASTNode {};
 
 class IntLiteral : public Expr {
 public:
-    int value = 0;
+    long long value = 0;   // literals that do not fit in int have type i64
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -182,6 +207,51 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// One `for vars in iterable if cond ...` clause of a comprehension
+struct CompFor {
+    std::vector<std::string> var_names;
+    std::unique_ptr<Expr> iterable;
+    std::vector<std::unique_ptr<Expr>> conditions;
+    int line = 0, column = 0;
+};
+
+// [x * 2 for x in xs if x > 0]   {k: v for k, v in d.items()}   {x for x in xs}
+// A generator expression passed to a call, sum(x for x in xs), is a List comprehension.
+class Comprehension : public Expr {
+public:
+    enum class Kind { List, Set, Dict };
+    Kind kind = Kind::List;
+    std::unique_ptr<Expr> element;   // the key, for a dict comprehension
+    std::unique_ptr<Expr> value;     // dict comprehension only
+    std::vector<CompFor> clauses;    // at least one
+    std::string element_type;        // set by the analyzer: C++ type of the elements/keys ("auto" if unknown)
+    std::string value_type;          // the same for the values of a dict comprehension
+    void accept(ASTVisitor& visitor) override;
+};
+
+// f"total: {n:5d} items"   ->   parts: "total: ", {n, "5d"}, " items"
+struct FStringPart {
+    std::string text;                // literal text (when expr is null)
+    std::unique_ptr<Expr> expr;      // replacement field
+    std::string spec;                // format spec after ':', e.g. ".2f"
+    char conversion = 0;             // 'r' or 's' from !r / !s
+    std::string debug_text;          // f"{x=}" -> "x="
+};
+class FString : public Expr {
+public:
+    std::vector<FStringPart> parts;
+    void accept(ASTVisitor& visitor) override;
+};
+
+// lambda a, b: a + b
+class Lambda : public Expr {
+public:
+    std::vector<std::string> params;
+    std::unique_ptr<Expr> body;
+    bool by_value = false;           // capture by copy (the lambda escapes its scope)
+    void accept(ASTVisitor& visitor) override;
+};
+
 // Base Statement
 class Stmt : public ASTNode {};
 
@@ -204,6 +274,7 @@ public:
     std::string var_name;
     std::unique_ptr<Type> type;
     std::unique_ptr<Expr> value;
+    bool inferred = false;   // written as `x = value`; the type comes from the value
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -440,6 +511,9 @@ public:
     virtual void visit(DeferStmt&) {}
     virtual void visit(TryStmt&) {}
     virtual void visit(RaiseStmt&) {}
+    virtual void visit(Comprehension&) {}
+    virtual void visit(FString&) {}
+    virtual void visit(Lambda&) {}
 };
 
 #endif

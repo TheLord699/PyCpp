@@ -1,0 +1,14 @@
+# expect-exit: 0
+# expect-stdout: HELLO, WORLD|hello, world|Hello, World|Hello, world
+# expect-stdout: ['a', 'b', 'c'] ['a', 'b,c'] ['x', 'y'] a-b-c
+# expect-stdout: 7 -1 2 True False True True False
+# expect-stdout: [ab] [ab  ] [xy] [  ab] [ ab ] [007] [-07]
+# expect-stdout: heLLo 1
+def main() -> int:
+    s = "hello, World"
+    print(s.upper() + "|" + s.lower() + "|" + s.title() + "|" + s.capitalize())
+    print("a,b,c".split(","), "a,b,c".split(",", 1), "  x   y ".split(), "-".join(["a", "b", "c"]))
+    print(s.find("World"), s.find("zzz"), "banana".count("an"), s.startswith("he"), s.endswith("x"), "123".isdigit(), "abc".isalpha(), "".isdigit())
+    print(f"[{'  ab  '.strip()}] [{'ab'.ljust(4)}] [{'xxyy'.strip('x').replace('yy', 'xy')}] [{'ab'.rjust(4)}] [{'ab'.center(4)}] [{'7'.zfill(3)}] [{'-7'.zfill(3)}]")
+    print("hello".replace("l", "L"), "hello".replace("l", "L", 1).count("L"))
+    return 0

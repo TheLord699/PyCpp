@@ -1,0 +1,6 @@
+# expect-exit: 0
+# args: --explain E0101
+# expect-stdout: E0101 (unknown-name)
+# expect-stdout: declared before they are used
+def main() -> int:
+    return 0

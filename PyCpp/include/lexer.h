@@ -80,7 +80,8 @@ enum class TokenType {
     END_OF_FILE, UNKNOWN,
 
     // Special
-    LIBRARY_NAME
+    LIBRARY_NAME,
+    FSTRING        // f"...": value is the raw text between the quotes
 };
 
 struct Token {
@@ -88,9 +89,13 @@ struct Token {
     std::string value;
     int line;
     int column;
+    // Position just after the token's last character (set by Lexer::tokenize), so a
+    // diagnostic can underline exactly the source text an expression came from.
+    int end_line = 0;
+    int end_column = 0;
 
     Token(TokenType t, const std::string& v, int l, int c)
-        : type(t), value(v), line(l), column(c) {
+        : type(t), value(v), line(l), column(c), end_line(l), end_column(c + static_cast<int>(v.size())) {
     }
 };
 
@@ -107,6 +112,7 @@ private:
     void skipComment();
     Token readNumber();
     Token readString();
+    Token readFString();
     Token readIdentifier();
     Token readOperator();
 

@@ -1,5 +1,7 @@
 # **PyCPP — Pythonic Syntax, Native C++ Power**
 
+[![OctoCounts](https://api.octocounts.com/badge/TheLord699/PyCpp/branch/master)](https://octocounts.com/github/TheLord699/PyCpp/tree/master)
+
 **Write like Python. Compile like C++. Run at native speed.**
 
 PyCPP is a statically typed, indentation-based programming language that compiles directly to modern C++20 or later.

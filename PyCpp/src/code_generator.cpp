@@ -1073,6 +1073,25 @@ void CodeGenerator::generateFunction(FunctionDef* func) {
         }
     }
 
+    // MSVC C4716 fallback for functions with no return.
+    // Keep W0003 as a warning, but ensure the generated C++ compiles.
+    if (func->name != "main" && !is_constructor && func->return_type) {
+        const auto* basic_return = dynamic_cast<BasicType*>(func->return_type.get());
+        const bool returns_void = basic_return &&
+            (basic_return->name == "void" || basic_return->name == "None" ||
+             basic_return->name == "auto");
+        bool has_return = false;
+        for (const auto& stmt : func->body) {
+            if (dynamic_cast<ReturnStmt*>(stmt.get())) {
+                has_return = true;
+                break;
+            }
+        }
+        if (!returns_void && !has_return) {
+            output << getIndent() << "return {};\n";
+        }
+    }
+
     dedent();
     output << getIndent() << "}\n";
 

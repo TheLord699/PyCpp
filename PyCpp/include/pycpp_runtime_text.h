@@ -172,10 +172,15 @@ std::string float_to_str(T v) {
 template <class T> std::string to_str(const T& v);
 template <class T> std::string to_repr(const T& v);
 template <class C> std::string container_str(const C& c);
+template <class T> struct is_tuple_t : std::false_type {};
+template <class... T> struct is_tuple_t<std::tuple<T...>> : std::true_type {};
+template <class T> inline constexpr bool is_tuple_v = is_tuple_t<T>::value;
+template <class T> std::string tuple_str(const T& t);
 
 template <class T>
 std::string to_str(const T& v) {
     if constexpr (is_text<T>) return std::string(v);
+    else if constexpr (is_tuple_v<T>) return tuple_str(v);
     else if constexpr (std::is_same_v<T, bool>) return v ? "True" : "False";
     else if constexpr (std::is_base_of_v<Exception, T>) return v.what();
     else if constexpr (std::is_same_v<T, char>) return std::string(1, v);
@@ -194,6 +199,18 @@ std::string to_repr(const T& v) {
     if constexpr (is_text<T>) return "'" + std::string(v) + "'";
     else if constexpr (std::is_same_v<T, char>) return "'" + std::string(1, v) + "'";
     else return to_str(v);
+}
+
+// (1, 'a')  /  (1,)
+template <class T>
+std::string tuple_str(const T& t) {
+    std::string out = "(";
+    std::apply([&](const auto&... item) {
+        size_t i = 0;
+        ((out += (i++ ? ", " : "") + to_repr(item)), ...);
+    }, t);
+    if constexpr (std::tuple_size_v<T> == 1) out += ",";
+    return out + ")";
 }
 
 // [1, 2, 3]  /  {'a': 1}  /  {1, 2}

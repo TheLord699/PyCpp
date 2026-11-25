@@ -577,6 +577,23 @@ std::unique_ptr<Stmt> PyCppParser::parseTopLevelStatement() {
     }
     return stmt;
 }
+// a, b  ->  TupleLiteral spanning both
+static std::unique_ptr<Expr> makeTuple(std::vector<std::unique_ptr<Expr>> elements) {
+    auto tuple = std::make_unique<TupleLiteral>();
+    if (!elements.empty()) {
+        const Expr* first = elements.front().get();
+        const Expr* last = elements.back().get();
+        tuple->line = first->line;
+        tuple->column = first->column;
+        tuple->span_line = first->span_line > 0 ? first->span_line : first->line;
+        tuple->span_column = first->span_line > 0 ? first->span_column : first->column;
+        tuple->span_end_line = last->span_end_line > 0 ? last->span_end_line : last->line;
+        tuple->span_end_column = last->span_end_line > 0 ? last->span_end_column : last->column + 1;
+    }
+    tuple->elements = std::move(elements);
+    return tuple;
+}
+
 // [diag-fix] A statement must end at a newline (or at the end of its block).
 void PyCppParser::expectStatementEnd() {
     if (match(TokenType::NEWLINE)) return;
@@ -660,6 +677,46 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
 
     // Only if it's not a declaration, try to parse as expression
     if (auto expr = parseExpression()) {
+        // t = a, b      and      a, b = value
+        if (check(TokenType::COMMA)) {
+            if (auto assign = dynamic_cast<BinaryOp*>(expr.get()); assign && assign->op == "=") {
+                std::vector<std::unique_ptr<Expr>> items;
+                items.push_back(std::move(assign->right));
+                while (match(TokenType::COMMA)) {
+                    if (check(TokenType::NEWLINE) || atEnd()) break;   // trailing comma
+                    items.push_back(parseExpression());
+                }
+                assign->right = makeTuple(std::move(items));
+            }
+            else if (isValidAssignmentTarget(expr.get())) {
+                const SourceSpan first_span = spanOf(expr.get());
+                auto unpack = std::make_unique<UnpackStmt>();
+                unpack->line = first_span.line > 0 ? first_span.line : tokens[position].line;
+                unpack->column = first_span.line > 0 ? first_span.column : tokens[position].column;
+                unpack->targets.push_back(std::move(expr));
+                while (match(TokenType::COMMA)) {
+                    auto target = parseBitOr();
+                    if (!target || !isValidAssignmentTarget(target.get()))
+                        throw std::runtime_error("Invalid assignment target");
+                    unpack->targets.push_back(std::move(target));
+                }
+                if (!match(TokenType::EQUAL))
+                    throw std::runtime_error("unexpected ',' after the end of the statement");
+                auto value = parseExpression();
+                if (check(TokenType::COMMA)) {
+                    std::vector<std::unique_ptr<Expr>> items;
+                    items.push_back(std::move(value));
+                    while (match(TokenType::COMMA)) {
+                        if (check(TokenType::NEWLINE) || atEnd()) break;
+                        items.push_back(parseExpression());
+                    }
+                    value = makeTuple(std::move(items));
+                }
+                unpack->value = std::move(value);
+                expectStatementEnd();
+                return unpack;
+            }
+        }
         auto stmt = std::make_unique<ExprStmt>();
         const SourceSpan where = spanOf(expr.get());
         stmt->expr = std::move(expr);
@@ -1214,6 +1271,12 @@ std::unique_ptr<VarDecl> PyCppParser::parseVarDecl() {
     if (match(TokenType::EQUAL)) {
         pycpp::debugLog() << "Variable " << var_decl->var_name << " has initializer" << std::endl;
         var_decl->value = parseExpression();
+        if (check(TokenType::COMMA)) {   // x: tuple[int, int] = 1, 2
+            std::vector<std::unique_ptr<Expr>> items;
+            items.push_back(std::move(var_decl->value));
+            while (match(TokenType::COMMA)) items.push_back(parseExpression());
+            var_decl->value = makeTuple(std::move(items));
+        }
     }
 
     expectStatementEnd();
@@ -1289,6 +1352,21 @@ std::unique_ptr<Type> PyCppParser::parseType() {
         set_type->column = set_token.column;
         set_type->name = "std::set<" + element->name + ">";
         return finish(std::move(set_type));
+    }
+
+    // tuple[A, B] -> std::tuple<A, B>
+    if (check(TokenType::TUPLE) && checkNext(TokenType::LBRACKET)) {
+        const Token tuple_token = advance();
+        consume(TokenType::LBRACKET, "Expected '[' after 'tuple'");
+        auto tuple_type = std::make_unique<BasicType>();
+        tuple_type->line = tuple_token.line;
+        tuple_type->column = tuple_token.column;
+        tuple_type->name = "std::tuple";
+        do {
+            tuple_type->type_args.push_back(parseType());
+        } while (match(TokenType::COMMA));
+        consume(TokenType::RBRACKET, "Expected ']' after tuple element types");
+        return finish(std::move(tuple_type));
     }
 
     // Handle dict types
@@ -1512,6 +1590,12 @@ std::unique_ptr<ReturnStmt> PyCppParser::parseReturnStmt() {
     // Return value (optional)
     if (!check(TokenType::NEWLINE) && !atEnd()) {
         return_stmt->value = parseExpression();
+        if (check(TokenType::COMMA)) {   // return a, b
+            std::vector<std::unique_ptr<Expr>> items;
+            items.push_back(std::move(return_stmt->value));
+            while (match(TokenType::COMMA)) items.push_back(parseExpression());
+            return_stmt->value = makeTuple(std::move(items));
+        }
     }
 
     expectStatementEnd();
@@ -2268,8 +2352,20 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
         }
         else if (match(TokenType::LPAREN)) {
             auto expr = parseExpression();
-            consume(TokenType::RPAREN, "Expected ')' after expression");
-            result = std::move(expr);
+            if (check(TokenType::COMMA)) {   // (a, b) is a tuple
+                std::vector<std::unique_ptr<Expr>> items;
+                items.push_back(std::move(expr));
+                while (match(TokenType::COMMA)) {
+                    if (check(TokenType::RPAREN)) break;   // (a,)
+                    items.push_back(parseExpression());
+                }
+                consume(TokenType::RPAREN, "Expected ')' after tuple elements");
+                result = makeTuple(std::move(items));
+            }
+            else {
+                consume(TokenType::RPAREN, "Expected ')' after expression");
+                result = std::move(expr);
+            }
         }
         // Allow explicit casts: int(x), float(x), str(x), bool(x)
         else if (check(TokenType::INT) || check(TokenType::FLOAT) ||

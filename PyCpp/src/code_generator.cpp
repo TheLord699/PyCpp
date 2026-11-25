@@ -541,6 +541,10 @@ bool CodeGenerator::usesSelf(Expr* expr) {
         return false;
     }
     if (auto lambda = dynamic_cast<Lambda*>(expr)) return usesSelf(lambda->body.get());
+    if (auto tuple = dynamic_cast<TupleLiteral*>(expr)) {
+        for (auto& e : tuple->elements) if (usesSelf(e.get())) return true;
+        return false;
+    }
     if (auto comp = dynamic_cast<Comprehension*>(expr)) {
         if (usesSelf(comp->element.get()) || usesSelf(comp->value.get())) return true;
         for (auto& c : comp->clauses) {
@@ -1413,6 +1417,16 @@ void CodeGenerator::generateExpression(Expr* expr) {
     if (auto comp = dynamic_cast<Comprehension*>(expr)) { generateComprehension(comp); return; }
     if (auto fs = dynamic_cast<FString*>(expr)) { generateFString(fs); return; }
     if (auto lambda = dynamic_cast<Lambda*>(expr)) { generateLambda(lambda); return; }
+    if (auto tuple = dynamic_cast<TupleLiteral*>(expr)) {
+        output << "std::make_tuple(";
+        for (size_t i = 0; i < tuple->elements.size(); ++i) {
+            if (i > 0) output << ", ";
+            output << listLiteralPrefix(tuple->elements[i].get());   // a braced list needs a real type
+            generateExpression(tuple->elements[i].get());
+        }
+        output << ")";
+        return;
+    }
 
     // Handle CallExpr first - using the COMPREHENSIVE approach
     if (auto call_expr = dynamic_cast<CallExpr*>(expr)) {
@@ -1422,6 +1436,16 @@ void CodeGenerator::generateExpression(Expr* expr) {
             useRuntime();
             const bool for_write = subscript_write;   // only the outermost subscript of `x[i] = v`
             subscript_write = false;
+            // t[0] on a tuple -> std::get<0>(t)
+            if (auto tuple_index = dynamic_cast<IntLiteral*>(call_expr->arguments[0].get())) {
+                const TypeInfo callee_info = exprTypeInfo(call_expr->callee.get());
+                if (callee_info.known && callee_info.ptr == 0 && callee_info.cls == "std::tuple") {
+                    output << "std::get<" << tuple_index->value << ">(";
+                    generateObjectOperand(call_expr->callee.get());
+                    output << ")";
+                    return;
+                }
+            }
             output << (for_write ? "pycpp::at_w(" : "pycpp::at(");
             generateObjectOperand(call_expr->callee.get());
             output << ", ";
@@ -3167,4 +3191,35 @@ void CodeGenerator::generateLambda(Lambda* lambda) {
     generateExpression(lambda->body.get());
     output << "; }";
     popScope();
+}
+
+void CodeGenerator::visit(TupleLiteral& node) {
+    generateExpression(&node);
+}
+
+// a, b = value: the value is evaluated once into a temporary, then every target is
+// assigned from it (or declared, when it is a new name). `a, b = b, a` therefore swaps.
+void CodeGenerator::visit(UnpackStmt& node) {
+    const std::string tmp = "pycpp_unpack_" + std::to_string(++unpack_counter);
+    output << getIndent() << "auto " << tmp << " = ";
+    generateExpression(node.value.get());
+    output << ";\n";
+    for (size_t i = 0; i < node.targets.size(); ++i) {
+        const std::string element = "std::get<" + std::to_string(i) + ">(" + tmp + ")";
+        auto id = dynamic_cast<Identifier*>(node.targets[i].get());
+        if (id && i < node.is_new.size() && node.is_new[i]) {
+            std::string type = i < node.new_types.size() ? node.new_types[i] : std::string();
+            auto mentions = [&type](const char* word) { return type.find(word) != std::string::npos; };
+            if (type.empty() || mentions("auto") || mentions("unknown") || mentions("None") || mentions("void"))
+                type = "auto";
+            output << getIndent() << type << " " << id->name << " = " << element << ";\n";
+            declareVar(id->name, nullptr);
+            continue;
+        }
+        if (auto sub = dynamic_cast<CallExpr*>(node.targets[i].get()); sub && sub->is_subscript)
+            subscript_write = true;   // d[k], x = ... inserts into a dict
+        output << getIndent();
+        generateExpression(node.targets[i].get());
+        output << " = " << element << ";\n";
+    }
 }

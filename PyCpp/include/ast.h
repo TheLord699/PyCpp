@@ -46,6 +46,8 @@ class ImportStmt;
 class UseStmt;
 class MatchStmt;
 class DeferStmt;
+class TupleLiteral;
+class UnpackStmt;
 
 // Base AST Node
 class ASTNode {
@@ -207,6 +209,13 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// (a, b)   a, b   -> std::make_tuple(a, b)
+class TupleLiteral : public Expr {
+public:
+    std::vector<std::unique_ptr<Expr>> elements;
+    void accept(ASTVisitor& visitor) override;
+};
+
 // One `for vars in iterable if cond ...` clause of a comprehension
 struct CompFor {
     std::vector<std::string> var_names;
@@ -258,6 +267,16 @@ class Stmt : public ASTNode {};
 class ExprStmt : public Stmt {
 public:
     std::unique_ptr<Expr> expr;
+    void accept(ASTVisitor& visitor) override;
+};
+
+// a, b = value        (each target is assigned from the tuple, or declared when it is a new name)
+class UnpackStmt : public Stmt {
+public:
+    std::vector<std::unique_ptr<Expr>> targets;
+    std::unique_ptr<Expr> value;
+    std::vector<bool> is_new;               // set by the analyzer: this target declares a new variable
+    std::vector<std::string> new_types;     // set by the analyzer: C++ type of that variable ("" = auto)
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -514,6 +533,8 @@ public:
     virtual void visit(Comprehension&) {}
     virtual void visit(FString&) {}
     virtual void visit(Lambda&) {}
+    virtual void visit(TupleLiteral&) {}
+    virtual void visit(UnpackStmt&) {}
 };
 
 #endif

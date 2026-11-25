@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: error[E0104]: cannot unpack 2 values into 3 names
+def main() -> int:
+    a, b, c = (1, 2)
+    return 0

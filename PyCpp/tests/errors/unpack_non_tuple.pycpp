@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-stderr: error[E0104]: cannot unpack a value of type int
+def main() -> int:
+    a, b = 5
+    return 0

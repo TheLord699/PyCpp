@@ -37,7 +37,7 @@ private:
     std::vector<std::map<std::string, Type*>> scopes;
     bool header_mode = false;   // true: emit declarations for the .h file
     bool needs_utility = false; // set when generated code uses std::move
-    int defer_counter = 0, match_counter = 0;
+    int defer_counter = 0, match_counter = 0, unpack_counter = 0;
     bool class_is_polymorphic = false;
     bool subscript_write = false;   // the subscript being generated is the target of a plain '='
 
@@ -139,6 +139,8 @@ public:
     void visit(MatchStmt& node) override;
     void visit(TryStmt& node) override;
     void visit(RaiseStmt& node) override;
+    void visit(TupleLiteral& node) override;
+    void visit(UnpackStmt& node) override;
 
     void visit(IntLiteral& node) override;
     void visit(FloatLiteral& node) override;

@@ -123,6 +123,7 @@ private:
     void analyzeMatchStmt(MatchStmt* m);
     void analyzeTryStmt(TryStmt* t);
     void analyzeRaiseStmt(RaiseStmt* r);
+    void analyzeUnpack(UnpackStmt* u);
     int handler_depth = 0;   // > 0 while analysing the body of an except clause
 
     // NEW: Import statement analysis

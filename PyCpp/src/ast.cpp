@@ -192,3 +192,11 @@ void FString::accept(ASTVisitor& visitor) {
 void Lambda::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }
+
+void TupleLiteral::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}
+
+void UnpackStmt::accept(ASTVisitor& visitor) {
+    visitor.visit(*this);
+}

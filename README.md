@@ -730,6 +730,8 @@ These have Python's behaviour (a user class that defines a method with the same 
 
 `{1, 2, 3}` is a set literal (`{}` is an empty dict). Indexing a dict with a missing key raises `KeyError`, as in Python; assigning (`d[k] = v`) inserts the key. A class that defines `__str__` can be printed, converted with `str()` and used in f-strings.
 
+Tuples: `t: tuple[int, str] = (1, "a")`, `return a, b`, `t[0]` (literal index), and unpacking `lo, hi = min_max(xs)` or `a, b = b, a` (new names are declared with the tuple's element types). `print(t)` shows `(1, 'a')`.
+
 The compiler automatically detects required standard library headers.
 
 # **10. Templates**

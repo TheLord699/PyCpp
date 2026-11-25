@@ -1,0 +1,51 @@
+# expect-exit: 0
+# expect-stdout: (3, 4) 3 4
+# expect-stdout: 2 9
+# expect-stdout: 3 2
+# expect-stdout: 2 1
+# expect-stdout: ('Ann', 7)
+# expect-stdout: 1 one
+# expect-stdout: 2 two
+# expect-stdout: [3, 2, 1]
+# expect-stdout: 7
+# expect-stdout: (1.5, 2.5)
+def min_max(xs: list[int]) -> tuple[int, int]:
+    return min(xs), max(xs)
+
+def divide(a: int, b: int) -> tuple[int, int]:
+    return a // b, a % b
+
+def first(t: tuple[int, str]) -> int:
+    return t[0]
+
+def main() -> int:
+    pair = (3, 4)
+    print(pair, pair[0], pair[1])
+
+    lo, hi = min_max([5, 2, 9])
+    print(lo, hi)
+
+    q, r = divide(17, 5)
+    print(q, r)
+
+    a = 1
+    b = 2
+    a, b = b, a
+    print(a, b)
+
+    name, age = ("Ann", 7)
+    print((name, age))
+
+    pairs: list[tuple[int, str]] = [(1, "one"), (2, "two")]
+    for n, word in pairs:
+        print(n, word)
+
+    xs: list[int] = [1, 2, 3]
+    xs[0], xs[2] = xs[2], xs[0]
+    print(xs)
+
+    print(first((7, "x")))
+
+    point: tuple[float, float] = (1.5, 2.5)
+    print(point)
+    return 0

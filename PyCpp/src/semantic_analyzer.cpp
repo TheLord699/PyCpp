@@ -12,7 +12,7 @@
 static std::string friendlyType(const std::string& t) {
     struct Rep { const char* from; const char* to; bool opens; };
     static const Rep reps[] = {
-        {"std::vector<", "list[", true}, {"std::map<", "dict[", true},
+        {"std::vector<", "list[", true}, {"std::map<", "dict[", true}, {"std::tuple<", "tuple[", true},
         {"std::string", "str", false},
         {"int8_t", "i8", false}, {"int16_t", "i16", false},
         {"int32_t", "i32", false}, {"int64_t", "i64", false},
@@ -239,7 +239,8 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
     }
 
     // Check template types (basic check)
-    if ((type.find("std::vector<") == 0 || type.find("std::map<") == 0 || type.find("std::set<") == 0) &&
+    if ((type.find("std::vector<") == 0 || type.find("std::map<") == 0 || type.find("std::set<") == 0 ||
+         type.find("std::tuple<") == 0) &&
         type.back() == '>') {
         // [fix2] check the element types too: list[Playr] is an error, not "simplified"
         const size_t open = type.find('<');
@@ -260,6 +261,26 @@ bool SemanticAnalyzer::isValidType(const std::string& type) {
     }
 
     return false;
+}
+
+// "std::tuple<A,std::map<K,V>>" -> { A, std::map<K,V> }
+static std::vector<std::string> splitTypeArgs(const std::string& t) {
+    std::vector<std::string> out;
+    const size_t open = t.find('<');
+    if (open == std::string::npos || t.back() != '>') return out;
+    const std::string inner = t.substr(open + 1, t.size() - open - 2);
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= inner.size(); ++i) {
+        const char c = i < inner.size() ? inner[i] : ',';
+        if (c == '<') depth++;
+        else if (c == '>') depth--;
+        else if (c == ',' && depth == 0) {
+            out.push_back(inner.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    return out;
 }
 
 // Type Compatibility
@@ -293,6 +314,17 @@ bool SemanticAnalyzer::typesAreCompatible(const std::string& type1, const std::s
                                   type2.substr(vec.size(), type2.size() - vec.size() - 1));
     }
 
+    // tuple[A, B]: same number of elements, each compatible
+    if (type1.rfind("std::tuple<", 0) == 0 && type2.rfind("std::tuple<", 0) == 0 &&
+        type1.back() == '>' && type2.back() == '>') {
+        const auto a = splitTypeArgs(type1);
+        const auto b = splitTypeArgs(type2);
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (!typesAreCompatible(a[i], b[i])) return false;
+        return true;
+    }
+
     // None converts to any pointer type
     if ((type1 == "None" && !type2.empty() && type2.back() == '*') ||
         (type2 == "None" && !type1.empty() && type1.back() == '*')) return true;
@@ -321,6 +353,12 @@ std::string SemanticAnalyzer::typeToString(Type* type) {
         }
         else if (basic_type->name == "std::string") {
             return "std::string";
+        }
+        if (basic_type->name == "std::tuple" && !basic_type->type_args.empty()) {
+            std::string out = "std::tuple<";
+            for (size_t i = 0; i < basic_type->type_args.size(); ++i)
+                out += (i ? "," : "") + typeToString(basic_type->type_args[i].get());
+            return out + ">";
         }
         return basic_type->name;
     }
@@ -429,6 +467,16 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
     else if (auto comp = dynamic_cast<Comprehension*>(expr)) {
         return "auto";   // the analysed type is cached in expr_types
     }
+    else if (auto tuple_lit = dynamic_cast<TupleLiteral*>(expr)) {
+        std::string out = "std::tuple<";
+        for (size_t i = 0; i < tuple_lit->elements.size(); ++i) {
+            std::string t = getExpressionType(tuple_lit->elements[i].get());
+            if (t == "str") t = "std::string";
+            if (t == "unknown" || t == "void" || t == "None") t = "auto";
+            out += (i ? "," : "") + t;
+        }
+        return out + ">";
+    }
     else if (auto list_lit = dynamic_cast<ListLiteral*>(expr)) {
         if (!list_lit->elements.empty()) {
             std::string elem = getExpressionType(list_lit->elements[0].get());
@@ -486,6 +534,14 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
                 return container.substr(12, container.size() - 13);
             if (startsWith(container, "std::map<") && container.back() == '>')
                 return mapTypes(container).second;
+            if (startsWith(container, "std::tuple<") && container.back() == '>') {
+                if (auto idx = dynamic_cast<IntLiteral*>(call->arguments[0].get())) {
+                    const auto parts = splitTypeArgs(container);
+                    if (idx->value >= 0 && idx->value < static_cast<long long>(parts.size()))
+                        return parts[static_cast<size_t>(idx->value)];
+                }
+                return "auto";
+            }
             if (isStrType(container)) return "char";
             if (!container.empty() && container.back() == '*')
                 return container.substr(0, container.size() - 1);
@@ -715,6 +771,10 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
         if (getExpressionType(comp->element.get()) == "void")
             errorAt("E0104", "the comprehension's value has no type: the function returns nothing", comp->element.get());
         while (opened--) exitScope();
+    }
+    else if (auto tuple_lit = dynamic_cast<TupleLiteral*>(expr)) {
+        trackBuiltinUsage("tuple");
+        for (auto& element : tuple_lit->elements) analyzeExpression(element.get());
     }
     else if (auto list_lit = dynamic_cast<ListLiteral*>(expr)) {
         trackBuiltinUsage("vector");
@@ -1074,6 +1134,12 @@ void SemanticAnalyzer::analyzeGuarded(Stmt* stmt) {
                 scopes.back()[v->var_name] = Symbol{ v->var_name, type, true, current_scope };
             }
         }
+        else if (auto u = dynamic_cast<UnpackStmt*>(stmt)) {   // keep the names, avoid follow-up errors
+            for (auto& target : u->targets)
+                if (auto id = dynamic_cast<Identifier*>(target.get()))
+                    if (!findSymbol(id->name) && !symbolExistsInCurrentScope(id->name))
+                        scopes.back()[id->name] = Symbol{ id->name, "auto", true, current_scope };
+        }
     }
 }
 
@@ -1084,6 +1150,7 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
         else if (dynamic_cast<IfStmt*>(stmt)) kind = "'if' statements";
         else if (dynamic_cast<WhileStmt*>(stmt)) kind = "'while' loops";
         else if (dynamic_cast<ForStmt*>(stmt)) kind = "'for' loops";
+        else if (dynamic_cast<UnpackStmt*>(stmt)) kind = "unpacking assignments";
         if (kind) {
             int ln = stmt->line, col = stmt->column, len = 1;
             if (auto es = dynamic_cast<ExprStmt*>(stmt); es && es->expr) {
@@ -1130,6 +1197,9 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
     }
     else if (auto defer_stmt = dynamic_cast<DeferStmt*>(stmt)) {
         analyzeDeferStmt(defer_stmt);
+    }
+    else if (auto unpack_stmt = dynamic_cast<UnpackStmt*>(stmt)) {
+        analyzeUnpack(unpack_stmt);
     }
     else if (auto try_stmt = dynamic_cast<TryStmt*>(stmt)) {
         analyzeTryStmt(try_stmt);
@@ -1728,6 +1798,52 @@ void SemanticAnalyzer::analyzeRaiseStmt(RaiseStmt* r) {
     analyzeExpression(r->value.get());
 }
 
+// a, b = value: every target is assigned from the tuple, or declared when it is a new name
+void SemanticAnalyzer::analyzeUnpack(UnpackStmt* u) {
+    analyzeExpression(u->value.get());
+    const std::string value_type = getExpressionType(u->value.get());
+    const size_t count = u->targets.size();
+
+    std::vector<std::string> parts;
+    if (startsWith(value_type, "std::tuple<") && value_type.back() == '>') {
+        parts = splitTypeArgs(value_type);
+        if (parts.size() != count) {
+            errorAt("E0104", "cannot unpack " + std::to_string(parts.size()) + (parts.size() == 1 ? " value" : " values") +
+                    " into " + std::to_string(count) + " names", u->value.get(),
+                    "the number of names on the left must match the number of values in the tuple");
+        }
+    }
+    else if (startsWith(value_type, "std::vector<") || startsWith(value_type, "std::map<") ||
+             startsWith(value_type, "std::set<") || isStrType(value_type) || isIntegerType(value_type) ||
+             isFloatType(value_type) || value_type == "bool") {
+        errorAt("E0104", "cannot unpack a value of type " + friendlyType(value_type), u->value.get(),
+                "only tuples can be unpacked: `a, b = (1, 2)`");
+    }
+
+    u->is_new.assign(count, false);
+    u->new_types.assign(count, "");
+    for (size_t i = 0; i < count; ++i) {
+        Expr* target = u->targets[i].get();
+        const std::string element = i < parts.size() ? parts[i] : std::string("auto");
+        auto id = dynamic_cast<Identifier*>(target);
+        const bool fresh = id && id->name != "self" && id->name.find("::") == std::string::npos &&
+                           !findSymbol(id->name) && !functions.count(id->name) && !classes.count(id->name) &&
+                           !(current_class && findAttribute(current_class->name, id->name));
+        if (fresh) {
+            u->is_new[i] = true;
+            u->new_types[i] = element;
+            addSymbol(id->name, element, true, id->line, id->column);
+            scopes.back()[id->name].is_var = (current_function != nullptr);
+            continue;
+        }
+        analyzeExpression(target);
+        const std::string target_type = getExpressionType(target);
+        if (!typesAreCompatible(target_type, element))
+            errorAt("E0104", "mismatched types: expected " + friendlyType(target_type) + ", found " + friendlyType(element),
+                    target, "convert explicitly, e.g. int(x), float(x) or str(x)");
+    }
+}
+
 // Visitor pattern implementations (delegate to analysis methods)
 void SemanticAnalyzer::visit(Program& node) { analyzeProgram(&node); }
 void SemanticAnalyzer::visit(FunctionDef& node) { analyzeFunction(&node); }
@@ -1912,6 +2028,12 @@ std::unique_ptr<Type> SemanticAnalyzer::typeFromString(const std::string& t) {
         dict->value_type = typeFromString(kv.second);
         dict->name = "std::map<" + dict->key_type->name + "," + dict->value_type->name + ">";
         return dict;
+    }
+    if (startsWith(t, "std::tuple<") && t.back() == '>') {
+        auto tup = std::make_unique<BasicType>();
+        tup->name = "std::tuple";
+        for (const auto& part : splitTypeArgs(t)) tup->type_args.push_back(typeFromString(part));
+        return tup;
     }
     auto basic = std::make_unique<BasicType>();
     basic->name = (t.empty() || t == "unknown") ? "auto" : isStrType(t) ? "std::string" : t;

@@ -189,7 +189,7 @@ Supported syntax:
 - `with`, `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
 - `pycpp` exits with the exit code of the program it ran.
 - Exceptions: `try` / `except` / `else` / `finally` and `raise`.
-  ```
+  ```python
   def main() -> int:
       try:
           n: int = int("abc")
@@ -203,7 +203,7 @@ Supported syntax:
 
 Example:
 
-```
+```python
 def main() -> int:
     age: int = 18
     if age >= 18:
@@ -253,7 +253,7 @@ Integer literals are 64-bit: a literal that fits in `int` has type `int`, a larg
 
 Inside a function, assigning to a name that is not declared yet declares it, with the type of the value:
 
-```
+```python
 def main() -> int:
     count = 0                 # int
     ratio = 7 / 2             # double (true division)
@@ -283,7 +283,7 @@ The objective is to make ordinary function calls simple while allowing developer
 
 ### **4.1 Default passing**
 
-```
+```python
 def print_player(player: Player) -> void:
     print(player.name)
 
@@ -301,7 +301,7 @@ The declared parameter type determines the passing semantics.
 
 Use `&T` when a function needs to modify an existing object.
 
-```
+```python
 def damage_player(player: &Player) -> void:
     player.health -= 10
 
@@ -317,7 +317,7 @@ The object is passed by reference rather than copied.
 
 Use `const &T` when a function needs to inspect an object without modifying it.
 
-```
+```python
 def inspect_player(player: const &Player) -> void:
     print(player.name)
     print(player.health)
@@ -329,7 +329,7 @@ This is particularly useful for large objects.
 
 Use `*T` for explicit pointer access.
 
-```
+```python
 def update_player(player: *Player) -> void:
     player.health -= 10
 ```
@@ -340,7 +340,7 @@ Pointers allow developers to perform lower-level operations when needed.
 
 PyCPP also supports multiple pointer levels.
 
-```
+```python
 def change_pointer(player: **Player) -> void:
     ...
 ```
@@ -349,7 +349,7 @@ def change_pointer(player: **Player) -> void:
 
 PyCPP supports C++ templates through Pythonic generic syntax.
 
-```
+```python
 def print_value[T](value: T) -> void:
     print(value)
 
@@ -381,7 +381,7 @@ PyCPP provides manual memory management without a garbage collector.
 
 Memory can be allocated and freed explicitly.
 
-```
+```python
 def main() -> int:
     player: *Player = mem.alloc[Player]()
     player.health = 100
@@ -409,7 +409,7 @@ Future enhancements:
 
 PyCPP supports standard control flow with Python-like syntax.
 
-```
+```python
 def main() -> int:
     for i in range(10):
         if i == 5:
@@ -439,7 +439,7 @@ PyCPP supports classes, constructors, instance variables, and inheritance.
 
 No manually managed header files are required.
 
-```
+```python
 class Player:
     def __init__(self, name: str, health: int):
         self.name: str = name
@@ -471,7 +471,7 @@ Features:
 
 `super().__init__(...)` constructs the base class. It must be the first statement of `__init__` (C++ builds the base before the derived class), and its arguments cannot use `self`. `super().method(...)` calls the base class's version of a method.
 
-```
+```python
 class Entity:
     def __init__(self, pos: Vec2, size: float):
         self.pos: Vec2 = pos
@@ -549,7 +549,7 @@ int main() {
 
 Output:
 
-```
+```text
 80
 ```
 
@@ -656,7 +656,7 @@ Notes:
 
 Structs provide lightweight data-only containers.
 
-```
+```python
 struct Vector2:
     x: float
     y: float
@@ -688,7 +688,7 @@ PyCPP integrates directly with the C++ STL.
 
 Example:
 
-```
+```python
 def main() -> int:
     numbers: list[int] = [1, 2, 3, 4, 5]
     for number in numbers:
@@ -698,7 +698,7 @@ def main() -> int:
 
 Dictionary iteration:
 
-```
+```python
 players: dict[str, int] = {
     "Alex": 100,
     "Sam": 80
@@ -710,7 +710,7 @@ for name, health in players.items():
 
 Comprehensions build collections in one expression:
 
-```
+```python
 evens = [n for n in numbers if n % 2 == 0]
 lengths = {name: len(name) for name in names}
 ```
@@ -736,7 +736,7 @@ PyCPP supports native C++ templates through Pythonic syntax.
 
 Generic functions:
 
-```
+```python
 def maximum[T](a: T, b: T) -> T:
     if a > b:
         return a
@@ -745,7 +745,7 @@ def maximum[T](a: T, b: T) -> T:
 
 Generic classes:
 
-```
+```python
 class Container[T]:
     def __init__(self, value: T):
         self.value: T = value
@@ -759,7 +759,7 @@ This allows compatibility with the STL and user-defined types.
 
 PyCPP supports compile-time constants through `constexpr`.
 
-```
+```cpp
 constexpr MAX_PLAYERS: int = 100
 constexpr PI: double = 3.141592653589793
 ```
@@ -770,7 +770,7 @@ These values are evaluated at compile time where possible.
 
 PyCPP uses Python-style imports for PyCPP source files.
 
-```
+```python
 from player import Player
 import game_utils
 ```
@@ -792,7 +792,7 @@ PyCPP is designed to work alongside existing C and C++ libraries.
 
 Developers can directly include external headers when necessary.
 
-```
+```cpp
 use <iostream>
 use <cmath>
 ```
@@ -807,13 +807,13 @@ PyCPP automatically detects which standard libraries are needed.
 
 For example:
 
-```
+```python
 numbers: list[int] = [1, 2, 3]
 ```
 
 Automatically generates the required:
 
-```
+```cpp
 #include <vector>
 ```
 
@@ -851,7 +851,7 @@ Performance should be comparable to equivalent C++ code when the generated code 
 
 The generated C++ can be built with GCC, Clang or MSVC. Select one with `--compiler`:
 
-```
+```bash
 pycpp main.pycpp --compiler gcc      # GCC (g++)
 pycpp main.pycpp --compiler clang    # Clang (clang++)
 pycpp main.pycpp --compiler msvc     # Visual Studio (cl.exe), Windows only
@@ -873,7 +873,7 @@ To build the PyCPP compiler itself, use the CMake presets: `linux-gcc-release` (
 
 By default PyCPP prints only what matters: the program's own output, warnings, and errors. Errors go to stderr, carry a source location, and make the command exit with status 1.
 
-```
+```console
 $ pycpp main.pycpp
 80
 
@@ -916,7 +916,7 @@ Each module is compiled to its own object file, and object files are kept in `te
 
 For tools and extensions, `--error-format=json` prints one JSON object per line on stderr:
 
-```
+```json
 {"file":"/src/game.pycpp","line":12,"column":9,"end_line":12,"end_column":13,"severity":"error","code":"E0101","name":"unknown-name","label":"","hint":"did you mean 'score'?","notes":[],"message":"cannot find 'scor' in this scope"}
 ```
 
@@ -1033,7 +1033,7 @@ errors, `E02xx` module and build errors, `E03xx` command-line errors, and `Wxxxx
 **Silencing a warning.** A `# allow:` comment silences warnings on its line, by name or code; on a comment line of its
 own it applies to the next line. Errors cannot be silenced.
 
-```
+```python
 scratch: int = compute()       # allow: unused
 # allow: division
 pixels: int = width / 2
@@ -1051,7 +1051,7 @@ Regression tests live in `PyCpp/tests/` (`errors`, `warnings`, `crashes`, `regre
 `# expect-stderr: error[E0101]`, `# expect-stderr-sequence: ...` for output that must appear in order, `# runs: 2` to
 run a case twice). Run them with:
 
-```
+```bash
 python PyCpp/tests/run_tests.py                  # everything
 python PyCpp/tests/run_tests.py errors crashes   # some folders
 python PyCpp/tests/run_tests.py -k unused -v     # filter by name, show output

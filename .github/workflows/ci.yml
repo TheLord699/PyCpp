@@ -1,0 +1,38 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: linux-gcc-release
+            compiler: gcc
+          - os: macos-latest
+            preset: macos-release
+            compiler: clang
+          - os: windows-latest
+            preset: x64-release
+            compiler: msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build the PyCPP compiler
+        run: |
+          cmake --preset ${{ matrix.preset }}
+          cmake --build --preset ${{ matrix.preset }}
+
+      - name: Run the regression tests
+        run: python PyCpp/tests/run_tests.py --compiler ${{ matrix.compiler }}

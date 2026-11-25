@@ -1,0 +1,9 @@
+# expect-exit: 0
+# expect-stdout: caught
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    try:
+        print(d["nope"])
+    except KeyError:
+        print("caught")
+    return 0

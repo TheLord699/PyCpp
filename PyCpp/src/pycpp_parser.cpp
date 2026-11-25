@@ -1781,18 +1781,17 @@ std::unique_ptr<Expr> PyCppParser::parseExpression() {
 }
 
 std::unique_ptr<Expr> PyCppParser::parseAssignment() {
-    // Handle walrus operator first
-    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::COLON) &&
-        position + 2 < tokens.size() && tokens[position + 2].type == TokenType::EQUAL) {
-        return parseWalrusOperator();
-    }
-
     // lambda has the lowest precedence of all expressions
     if (check(TokenType::LAMBDA)) {
         return parseLambda();
     }
 
     auto expr = parseBooleanOperations();
+
+    if (check(TokenType::WALRUS)) {
+        throw std::runtime_error(withHint("assignment expressions (':=') are not supported yet by PyCPP",
+                                 "assign on its own line first (`x = value`), then use x"));
+    }
 
     // Conditional expression:  value_if_true if condition else value_if_false
     if (check(TokenType::IF)) {
@@ -2427,6 +2426,27 @@ std::unique_ptr<Expr> PyCppParser::parseDictLiteral() {
             parseComprehensionClauses(*comp);
             consume(TokenType::RBRACE, "Expected '}' after the set comprehension");
             return comp;
+        }
+        if (check(TokenType::COMMA) || check(TokenType::RBRACE)) {   // {1, 2, 3}: set literal
+            auto elements = std::make_unique<ListLiteral>();
+            elements->line = dict->line;
+            elements->column = dict->column;
+            elements->elements.push_back(std::move(first_key));
+            while (match(TokenType::COMMA)) {
+                if (check(TokenType::RBRACE)) break;   // trailing comma
+                elements->elements.push_back(parseExpression());
+            }
+            consume(TokenType::RBRACE, "Expected '}' after set elements");
+            auto callee = std::make_unique<Identifier>();
+            callee->name = "set";
+            callee->line = dict->line;
+            callee->column = dict->column;
+            auto call = std::make_unique<CallExpr>();
+            call->line = dict->line;
+            call->column = dict->column;
+            call->callee = std::move(callee);
+            call->arguments.push_back(std::move(elements));
+            return call;   // set([1, 2, 3])
         }
         consume(TokenType::COLON, "Expected ':' after dictionary key");
         auto first_value = parseExpression();

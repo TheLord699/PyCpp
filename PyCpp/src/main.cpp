@@ -21,7 +21,6 @@
 #include "../include/semantic_analyzer.h"
 #include "../include/include_manager.h"
 #include "../include/code_generator.h"
-#include "../include/header_generator.h"
 #include "../include/import_resolver.h"
 #include "../include/compiler_backend.h"
 #include "../include/log.h"

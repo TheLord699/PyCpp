@@ -1,0 +1,7 @@
+# expect-exit: 0
+# expect-stdout: 1 5 2
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    d["b"] = 5
+    print(d["a"], d["b"], len(d))
+    return 0

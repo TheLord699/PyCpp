@@ -728,6 +728,8 @@ These have Python's behaviour (a user class that defines a method with the same 
 
 `xs.pop()` on an empty list raises `IndexError`, `xs.remove(x)` and `s.index(sub)` raise `ValueError` when nothing is found, and `d.pop(k)` raises `KeyError` for a missing key, as in Python. `d.get(k)` without a default returns the value type's default (`0`, `""`, ...) where Python returns `None`. The C++ members of these types (`size()`, `push_back()`, ...) remain available.
 
+`{1, 2, 3}` is a set literal (`{}` is an empty dict). Indexing a dict with a missing key raises `KeyError`, as in Python; assigning (`d[k] = v`) inserts the key. A class that defines `__str__` can be printed, converted with `str()` and used in f-strings.
+
 The compiler automatically detects required standard library headers.
 
 # **10. Templates**

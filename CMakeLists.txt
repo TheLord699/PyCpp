@@ -28,7 +28,6 @@ add_executable(PyCpp
     "PyCpp/src/main.cpp"
     "PyCpp/src/ast.cpp"
     "PyCpp/src/include_manager.cpp"
-    "PyCpp/src/header_generator.cpp"
     "PyCpp/src/import_resolver.cpp"
     "PyCpp/src/compiler_backend.cpp"  # Only .cpp files here
 )

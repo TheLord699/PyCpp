@@ -1,7 +1,6 @@
 #include "../include/log.h"
 #include "../include/code_generator.h"
 #include "../include/diagnostics.h"
-#include "../include/header_generator.h"
 #include "../include/builtin_methods.h"
 #include <climits>
 #include <functional>
@@ -803,6 +802,7 @@ void CodeGenerator::generateProgram(Program* program, IncludeManager& include_ma
     // code can never disagree (range() expands to std::vector, min() to std::min, ...).
     static const std::vector<std::pair<std::string, std::string>> emitted_to_header = {
         {"std::cout", "iostream"}, {"std::cin", "iostream"}, {"std::flush", "iostream"},
+        {"std::ostream", "iostream"},
         {"std::string", "string"}, {"std::to_string", "string"}, {"std::stoi", "string"},
         {"std::stof", "string"}, {"std::getline", "string"},
         {"std::vector", "vector"}, {"std::map", "map"}, {"std::set", "set"},
@@ -1257,6 +1257,16 @@ void CodeGenerator::generateClass(ClassDef* cls) {
         generateFunction(method.get());
     }
 
+    // __str__ makes print(obj), str(obj) and f"{obj}" work
+    if (cls->type_params.empty()) {
+        for (auto& method : cls->methods) {
+            if (method->name != "__str__") continue;
+            output << "\n" << getIndent() << "friend std::ostream& operator<<(std::ostream& os, const " << cls->name
+                   << "& self) { return os << const_cast<" << cls->name << "&>(self).__str__(); }\n";
+            break;
+        }
+    }
+
     dedent();
     output << getIndent() << "};\n";
 
@@ -1410,7 +1420,9 @@ void CodeGenerator::generateExpression(Expr* expr) {
         if (call_expr->is_subscript && call_expr->arguments.size() == 1) {
             // [fix2] bounds-checked, Python-style indexing: a[-1] works, a[99] raises IndexError
             useRuntime();
-            output << "pycpp::at(";
+            const bool for_write = subscript_write;   // only the outermost subscript of `x[i] = v`
+            subscript_write = false;
+            output << (for_write ? "pycpp::at_w(" : "pycpp::at(");
             generateObjectOperand(call_expr->callee.get());
             output << ", ";
             generateExpression(call_expr->arguments[0].get());
@@ -1578,6 +1590,7 @@ void CodeGenerator::generateExpression(Expr* expr) {
         }
         else if ((function_name == "list" || function_name == "set") && call_expr->arguments.size() == 1) {
             output << lambdaCapture() << "() { auto&& pycpp_c = ";
+            output << listLiteralPrefix(call_expr->arguments[0].get());   // a braced list needs a real type
             generateExpression(call_expr->arguments[0].get());
             output << "; return std::" << (function_name == "list" ? "vector" : "set")
                    << "<std::decay_t<decltype(*pycpp_c.begin())>>(pycpp_c.begin(), pycpp_c.end()); }()";
@@ -1852,39 +1865,6 @@ void CodeGenerator::generateExpression(Expr* expr) {
             generateExpression(call_expr->arguments[0].get());
             output << (function_name == "bin" ? ", 2, \"0b\")"
                      : function_name == "oct" ? ", 8, \"0o\")" : ", 16, \"0x\")");
-            return;
-        }
-        else if (function_name == "bin") {
-            if (call_expr->arguments.size() > 0) {
-                output << lambdaCapture() << "() { std::stringstream ss; ss << std::hex << ";
-                generateExpression(call_expr->arguments[0].get());
-                output << "; return ss.str(); }()";
-            }
-            else {
-                output << "\"0b0\"";
-            }
-            return;
-        }
-        else if (function_name == "oct") {
-            if (call_expr->arguments.size() > 0) {
-                output << lambdaCapture() << "() { std::stringstream ss; ss << std::oct << ";
-                generateExpression(call_expr->arguments[0].get());
-                output << "; return ss.str(); }()";
-            }
-            else {
-                output << "\"0o0\"";
-            }
-            return;
-        }
-        else if (function_name == "hex") {
-            if (call_expr->arguments.size() > 0) {
-                output << lambdaCapture() << "() { std::stringstream ss; ss << std::hex << ";
-                generateExpression(call_expr->arguments[0].get());
-                output << "; return ss.str(); }()";
-            }
-            else {
-                output << "\"0x0\"";
-            }
             return;
         }
         else if (function_name == "chr") {
@@ -2249,26 +2229,6 @@ void CodeGenerator::generateExpression(Expr* expr) {
             return;
         }
 
-        // Handle power operator
-        if (bin_op->op == "**") {
-            output << "std::pow(";
-            generateExpression(bin_op->left.get());
-            output << ", ";
-            generateExpression(bin_op->right.get());
-            output << ")";
-            return;
-        }
-
-        // Handle floor division
-        if (bin_op->op == "//") {
-            output << "static_cast<int>(";
-            generateExpression(bin_op->left.get());
-            output << " / ";
-            generateExpression(bin_op->right.get());
-            output << ")";
-            return;
-        }
-
         if (bin_op->op == "//=" || bin_op->op == "%=" || bin_op->op == "**=") {
             // `x //= y` must not be emitted as-is: in C++ that starts a comment
             useRuntime();
@@ -2343,6 +2303,8 @@ void CodeGenerator::generateExpression(Expr* expr) {
                   static_cast<UnaryOp*>(bin_op->left.get())->op == "*");
 
             if (needs_parens) output << "(";
+            if (auto sub = dynamic_cast<CallExpr*>(bin_op->left.get()); sub && sub->is_subscript)
+                subscript_write = true;   // d[k] = v inserts into a dict
             generateExpression(bin_op->left.get());
             if (needs_parens) output << ")";
 

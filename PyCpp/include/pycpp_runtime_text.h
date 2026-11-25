@@ -315,13 +315,19 @@ public:
 };
 template <class F> Defer(F) -> Defer<F>;
 
-// a[i]: negative indices count from the end, an index out of range raises IndexError
+// a[i]: negative indices count from the end, an index out of range raises IndexError.
+// For a dict, a missing key raises KeyError (`d[k] = v` goes through at_w and inserts).
 template <class C, class I>
 decltype(auto) at(C&& c, I i) {
     using Plain = std::remove_cv_t<std::remove_reference_t<C>>;
+    constexpr bool is_dict = requires { typename Plain::mapped_type; };
     constexpr bool direct = std::is_pointer_v<Plain> || std::is_array_v<Plain> ||
-                            !std::is_integral_v<I> || requires { typename Plain::mapped_type; };
-    if constexpr (direct) {
+                            !std::is_integral_v<I>;
+    if constexpr (is_dict) {
+        auto it = c.find(i);
+        if (it == c.end()) fail("KeyError", to_repr(i));
+        return (it->second);
+    } else if constexpr (direct) {
         return (c[i]);
     } else {
         const long long n = static_cast<long long>(c.size());
@@ -332,6 +338,15 @@ decltype(auto) at(C&& c, I i) {
                                " out of range (size " + std::to_string(n) + ")");
         return (c[static_cast<size_t>(k)]);
     }
+}
+
+// `d[k] = v`: a dict inserts the key when it is missing, as in Python.
+// Everything else behaves like at().
+template <class C, class I>
+decltype(auto) at_w(C&& c, I i) {
+    using Plain = std::remove_cv_t<std::remove_reference_t<C>>;
+    if constexpr (requires { typename Plain::mapped_type; }) return (c[i]);
+    else return at(std::forward<C>(c), i);
 }
 
 // ===================== Python methods of str, list, dict and set =====================

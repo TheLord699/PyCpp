@@ -1,0 +1,9 @@
+# expect-exit: 0
+# expect-stdout: {1, 2, 3} True
+# expect-stdout: {'a', 'b'}
+def main() -> int:
+    s: set[int] = {3, 1, 2, 3}
+    print(s, 2 in s)
+    words: set[str] = {"b", "a"}
+    print(words)
+    return 0

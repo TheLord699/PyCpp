@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-stderr: error[E0011]: assignment expressions (':=') are not supported yet by PyCPP
+def main() -> int:
+    x = 1
+    y = x := 2
+    return 0

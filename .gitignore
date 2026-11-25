@@ -147,8 +147,6 @@ test_logs
 # Never track PyCpp temp directories
 temp/
 
-pycpp-syntax/
-
 # Ignore compiled executables
 *.exe
 

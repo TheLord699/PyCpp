@@ -1,0 +1,27 @@
+{
+    "name": "pycpp-syntax",
+    "displayName": "PyCPP Syntax",
+    "description": "Syntax highlighting for PyCPP",
+    "version": "0.0.1",
+    "publisher": "local",
+    "engines": {
+        "vscode": "^1.0.0"
+    },
+    "contributes": {
+        "languages": [
+            {
+                "id": "pycpp",
+                "aliases": ["PyCPP", "pycpp"],
+                "extensions": [".pycpp"],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "pycpp",
+                "scopeName": "source.pycpp",
+                "path": "./syntaxes/pycpp.tmLanguage.json"
+            }
+        ]
+    }
+}

@@ -404,7 +404,6 @@ Features:
 
 Future enhancements:
 
-- RAII wrappers.
 - Ownership tracking.
 - Move semantics.
 - Safer automatic cleanup.

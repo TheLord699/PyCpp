@@ -154,7 +154,6 @@ If the selected compiler cannot be found, PyCPP reports an error rather than sil
 - Headerless development — no `.h` or `.hpp` files.
 - Full C/C++ interoperability.
 - Manual memory management.
-- Optional unsafe flag.
 - Templates and compile-time evaluation.
 - Python-like imports and modules.
 - Flexible function argument passing.

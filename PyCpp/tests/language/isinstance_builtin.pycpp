@@ -1,0 +1,26 @@
+# expect-exit: 0
+# expect-stdout: True False True
+# expect-stdout: dog True False
+# expect-stdout: cat False True
+class Animal:
+    def name(self) -> str:
+        return "animal"
+
+class Dog(Animal):
+    def name(self) -> str:
+        return "dog"
+
+class Cat(Animal):
+    def name(self) -> str:
+        return "cat"
+
+def check(a: &Animal) -> void:
+    print(a.name(), isinstance(a, Dog), isinstance(a, Cat))
+
+def main() -> int:
+    print(isinstance(5, int), isinstance("x", int), isinstance(2.5, (int, float)))
+    d: Dog = Dog()
+    c: Cat = Cat()
+    check(d)
+    check(c)
+    return 0

@@ -28,6 +28,7 @@ private:
         std::vector<std::pair<std::string, std::string>> parameters;
         size_t required = 0;      // [fix2] parameters without a default value
         bool generic = false;
+        bool variadic = false;   /* fix.py2:kw-header */ // last parameter is *args
         int line = 0;             // where it is defined (for notes)
     };
 

@@ -1,0 +1,12 @@
+# expect-exit: 0
+# expect-stdout: a-b-c
+# expect-stdout: no newline then newline
+# expect-stdout: 12
+# expect-stdout: 1, 2, 3
+def main() -> int:
+    print("a", "b", "c", sep="-")
+    print("no newline", end="")
+    print(" then newline")
+    print(1, 2, sep="")
+    print(1, 2, 3, sep=", ")
+    return 0

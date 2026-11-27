@@ -1,0 +1,16 @@
+# expect-exit: 0
+# expect-stdout: banana fig
+# expect-stdout: ['banana', 'pear', 'fig']
+# expect-stdout: [3, 2, 1]
+# expect-stdout: -9
+def negate(n: int) -> int:
+    return 0 - n
+
+def main() -> int:
+    words: list[str] = ["pear", "fig", "banana"]
+    print(max(words, key=len), min(words, key=len))
+    print(sorted(words, key=len, reverse=True))
+    print(sorted([3, 1, 2], reverse=True))
+    nums: list[int] = [4, -9, 2]
+    print(max(nums, key=negate))
+    return 0

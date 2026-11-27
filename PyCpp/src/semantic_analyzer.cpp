@@ -586,6 +586,7 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
             if (n == "any" || n == "all") return "bool";   // [fix.py]
             if (n == "repr") return "std::string";
             if (n == "type") return "auto";
+            if (n == "isinstance" || n == "issubclass" || n == "hasattr") return "bool";   /* fix.py2:isinstance-type */
             if (n == "len" || n == "ord") return "int";
             if (n == "str" || n == "chr" || n == "bin" || n == "oct" || n == "hex" || n == "input") return "std::string";
             if (n == "int") return "int";
@@ -597,6 +598,10 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
                 const std::string arg = getExpressionType(call->arguments[0].get());
                 if (startsWith(arg, "std::vector<")) return arg;
                 return "auto";
+            }
+            if ((n == "min" || n == "max") && call->arguments.size() == 2) {   /* fix.py2:minmax-type */
+                auto key_arg = dynamic_cast<BinaryOp*>(call->arguments[1].get());
+                if (key_arg && key_arg->op == "=") return elementTypeOf(getExpressionType(call->arguments[0].get()));
             }
             if ((n == "min" || n == "max" || n == "sum") && call->arguments.size() == 1)
                 return elementTypeOf(getExpressionType(call->arguments[0].get()));
@@ -850,7 +855,11 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             return;
         }
         analyzeExpression(call->callee.get());
-        for (auto& arg : call->arguments) analyzeExpression(arg.get());
+        for (auto& arg : call->arguments) {   /* fix.py2:kw-loop */
+            auto kw_arg = dynamic_cast<BinaryOp*>(arg.get());
+            if (kw_arg && kw_arg->op == "=" && dynamic_cast<Identifier*>(kw_arg->left.get())) analyzeExpression(kw_arg->right.get());   // the name is not a variable
+            else analyzeExpression(arg.get());
+        }
 
         bool keyword_args = false;
         for (auto& a : call->arguments)
@@ -870,7 +879,99 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
             return;
         }
 
-        if (keyword_args) return;   // keyword arguments are matched by the C++ compiler
+        if (keyword_args) {   /* fix.py2:kw-reorder */
+            if (auto print_callee = dynamic_cast<Identifier*>(call->callee.get()); print_callee && print_callee->name == "print") {
+                for (auto& a : call->arguments) {
+                    auto kw = dynamic_cast<BinaryOp*>(a.get());
+                    auto kid = kw && kw->op == "=" ? dynamic_cast<Identifier*>(kw->left.get()) : nullptr;
+                    if (kid && kid->name != "sep" && kid->name != "end" && kid->name != "flush")
+                        errorAt("E0106", "print() has no keyword argument '" + kid->name + "'", kid,
+                                "print accepts sep=, end= and flush=");
+                }
+                return;
+            }
+            const FunctionSymbol* kw_target = nullptr;
+            std::string kw_what;
+            if (auto kc = dynamic_cast<Identifier*>(call->callee.get())) {
+                auto kf = functions.find(kc->name);
+                Symbol* kb = findSymbol(kc->name);
+                if (kf != functions.end() && (!kb || kb->type == "function") && !kf->second.generic) {
+                    kw_target = &kf->second;
+                    kw_what = "function '" + kc->name + "'";
+                }
+                else if ((!kb || kb->type == "class" || kb->type == "imported_symbol") && classes.count(kc->name) &&
+                         !classes[kc->name].is_struct) {
+                    kw_target = findMethod(kc->name, "__init__");
+                    kw_what = "'" + kc->name + "' (its __init__)";
+                }
+            }
+            else if (auto km = dynamic_cast<MemberAccess*>(call->callee.get())) {
+                std::string ot = getExpressionType(km->object.get());
+                if (!ot.empty() && ot.back() == '*') ot.pop_back();
+                if (const ClassSymbol* kcls = classOf(ot); kcls && !kcls->is_struct) {
+                    kw_target = findMethod(ot, km->member);
+                    kw_what = "method '" + ot + "." + km->member + "'";
+                }
+            }
+            if (!kw_target || kw_target->generic || kw_target->variadic) return;
+
+            const size_t kw_total = kw_target->parameters.size();
+            std::string kw_sig = kw_target->name + "(";
+            for (size_t p = 0; p < kw_total; ++p)
+                kw_sig += (p ? ", " : "") + kw_target->parameters[p].first + ": " + friendlyType(kw_target->parameters[p].second);
+            kw_sig += ")";
+
+            std::vector<std::pair<std::string, size_t>> kw_named;   // keyword name -> argument index
+            size_t kw_positional = 0;
+            for (size_t i = 0; i < call->arguments.size(); ++i) {
+                auto kw = dynamic_cast<BinaryOp*>(call->arguments[i].get());
+                auto kid = kw && kw->op == "=" ? dynamic_cast<Identifier*>(kw->left.get()) : nullptr;
+                if (kid) kw_named.emplace_back(kid->name, i);
+                else {
+                    if (!kw_named.empty())
+                        errorAt("E0106", "a positional argument cannot follow a keyword argument", call->arguments[i].get());
+                    ++kw_positional;
+                }
+            }
+            if (kw_positional > kw_total)
+                errorAt("E0106", kw_what + " takes " + std::to_string(kw_total) + (kw_total == 1 ? " argument" : " arguments") +
+                        " but " + std::to_string(kw_positional) + " positional ones were supplied", call, "signature: " + kw_sig);
+
+            std::vector<long long> kw_slot(kw_total, -1);   // parameter -> index into call->arguments
+            for (size_t i = 0; i < kw_positional; ++i) kw_slot[i] = static_cast<long long>(i);
+            for (const auto& named : kw_named) {
+                size_t j = kw_total;
+                for (size_t p = 0; p < kw_total; ++p) if (kw_target->parameters[p].first == named.first) j = p;
+                Expr* at = call->arguments[named.second].get();
+                if (j == kw_total)
+                    errorAt("E0106", kw_what + " has no parameter named '" + named.first + "'", at, "signature: " + kw_sig);
+                if (kw_slot[j] >= 0)
+                    errorAt("E0106", kw_what + " got more than one value for '" + named.first + "'", at);
+                kw_slot[j] = static_cast<long long>(named.second);
+            }
+            size_t kw_filled = 0;
+            while (kw_filled < kw_total && kw_slot[kw_filled] >= 0) ++kw_filled;
+            for (size_t p = kw_filled; p < kw_total; ++p)
+                if (kw_slot[p] >= 0)
+                    errorAt("E0106", "parameter '" + kw_target->parameters[kw_filled].first + "' is skipped but '" +
+                            kw_target->parameters[p].first + "' is given",
+                            call->arguments[static_cast<size_t>(kw_slot[p])].get(),
+                            "keyword arguments must cover every parameter up to the last one given; also pass '" +
+                            kw_target->parameters[kw_filled].first + "=...'");
+            if (kw_filled < kw_target->required)
+                errorAt("E0106", kw_what + " is missing the argument for '" + kw_target->parameters[kw_filled].first + "'",
+                        call, "signature: " + kw_sig);
+
+            std::vector<std::unique_ptr<Expr>> ordered;
+            for (size_t p = 0; p < kw_filled; ++p) {
+                auto& src = call->arguments[static_cast<size_t>(kw_slot[p])];
+                auto kw = dynamic_cast<BinaryOp*>(src.get());
+                auto kid = kw && kw->op == "=" ? dynamic_cast<Identifier*>(kw->left.get()) : nullptr;
+                if (kid) ordered.push_back(std::move(kw->right));
+                else ordered.push_back(std::move(src));
+            }
+            call->arguments = std::move(ordered);
+        }   // keyword arguments are matched by the C++ compiler
 
         if (auto member = dynamic_cast<MemberAccess*>(call->callee.get())) {
             checkMethodCall(call, member);
@@ -993,7 +1094,8 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
 
             for (const auto& param : func->parameters) {
                 func_sym.parameters.emplace_back(param.name, typeToString(param.type.get()));
-                if (!param.default_value) func_sym.required = func_sym.parameters.size();
+                if (param.variadic) func_sym.variadic = true;   /* fix.py2:va-reg-fn */
+                else if (!param.default_value) func_sym.required = func_sym.parameters.size();
             }
 
             functions[func->name] = func_sym;
@@ -1626,6 +1728,13 @@ void SemanticAnalyzer::analyzeWhileStmt(WhileStmt* while_stmt) {
     enterScope();
     analyzeBody(while_stmt->body);
     exitScope();
+    if (!while_stmt->else_body.empty()) {   /* fix.py2:while-analyze */
+        enterScope();
+        analyzeBody(while_stmt->else_body);
+        exitScope();
+    }
+    enterScope();   // balanced by the exitScope() that follows
+    exitScope();
 }
 
 void SemanticAnalyzer::analyzeForStmt(ForStmt* for_stmt) {
@@ -1934,7 +2043,8 @@ void SemanticAnalyzer::registerClassMembers(ClassDef* cls) {
         for (const auto& param : method->parameters) {
             if (param.name == "self") continue;
             m.parameters.emplace_back(param.name, typeToString(param.type.get()));
-            if (!param.default_value) m.required = m.parameters.size();
+            if (param.variadic) m.variadic = true;   /* fix.py2:va-reg-method */
+            else if (!param.default_value) m.required = m.parameters.size();
         }
         sym.methods[method->name] = m;
     }
@@ -2053,6 +2163,30 @@ static bool isSimpleType(const std::string& t) {
 
 void SemanticAnalyzer::checkCallArguments(CallExpr* call, const std::string& what, const FunctionSymbol& fs,
                                           int name_length) {
+    if (fs.variadic && !fs.parameters.empty()) {   /* fix.py2:va-pack */   // f(1, 2, 3) -> f({2, 3}) for def f(a, *rest)
+        const size_t fixed = fs.parameters.size() - 1;
+        const bool packed = call->arguments.size() == fixed + 1 &&
+                            dynamic_cast<ListLiteral*>(call->arguments[fixed].get()) &&
+                            call->arguments[fixed]->span_line == -1;
+        if (!packed && call->arguments.size() >= fixed) {
+            const std::string elem = elementTypeOf(fs.parameters.back().second);
+            for (size_t i = fixed; i < call->arguments.size(); ++i) {
+                Expr* extra = call->arguments[i].get();
+                const std::string found = getExpressionType(extra);
+                if ((isSimpleType(elem) || classes.count(elem)) && (isSimpleType(found) || classes.count(found)) &&
+                    !typesAreCompatible(elem, found))
+                    errorAt("E0107", "mismatched types: '*" + fs.parameters.back().first + "' takes " + friendlyType(elem) +
+                            " values, found " + friendlyType(found), extra);
+            }
+            auto pack = std::make_unique<ListLiteral>();
+            pack->line = call->line;
+            pack->column = call->column;
+            pack->span_line = -1;   // marks a list built from *args
+            for (size_t i = fixed; i < call->arguments.size(); ++i) pack->elements.push_back(std::move(call->arguments[i]));
+            call->arguments.resize(fixed);
+            call->arguments.push_back(std::move(pack));
+        }
+    }
     const size_t given = call->arguments.size();
     const size_t total = fs.parameters.size();
     auto plural = [](size_t n) { return std::to_string(n) + (n == 1 ? " argument" : " arguments"); };

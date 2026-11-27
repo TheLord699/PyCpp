@@ -1,12 +1,11 @@
 # expect-exit: 1
 # expect-stderr: error[E0011]: generators ('yield') are not supported yet by PyCPP
 # expect-stderr: build and return a list instead
-# expect-stderr: error[E0011]: 'with' statements are not supported yet by PyCPP
-# expect-stderr: use `defer`
+# expect-stderr: error[E0011]: 'global' is not supported yet by PyCPP
+# expect-stderr: pass the value as a parameter
 def numbers() -> int:
     yield 1
 
 def main() -> int:
-    with open("x") as f:
-        print(f)
+    global counter
     return 0

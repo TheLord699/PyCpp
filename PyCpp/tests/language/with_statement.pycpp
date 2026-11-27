@@ -1,0 +1,22 @@
+# expect-exit: 0
+# expect-stdout: enter a
+# expect-stdout: body a
+# expect-stdout: exit a
+# expect-stdout: enter b
+# expect-stdout: exit b
+class Res:
+    def __init__(self, name: str):
+        self.name: str = name
+
+    def __enter__(self) -> void:
+        print("enter", self.name)
+
+    def __exit__(self) -> void:
+        print("exit", self.name)
+
+def main() -> int:
+    with Res("a") as r:
+        print("body", r.name)
+    with Res("b"):
+        print("body b")
+    return 0

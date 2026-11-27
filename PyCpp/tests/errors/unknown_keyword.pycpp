@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-stderr: error[E0106]: function 'add' has no parameter named 'zz'
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main() -> int:
+    print(add(1, zz=2))
+    return 0

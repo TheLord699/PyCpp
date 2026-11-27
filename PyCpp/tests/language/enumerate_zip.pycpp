@@ -1,0 +1,16 @@
+# expect-exit: 0
+# expect-stdout: 1 a
+# expect-stdout: 2 b
+# expect-stdout: 5 x
+# expect-stdout: 1 x 10
+# expect-stdout: 2 y 20
+def main() -> int:
+    letters: list[str] = ["a", "b"]
+    for i, ch in enumerate(letters, 1):
+        print(i, ch)
+    words: list[str] = ["x"]
+    for j, w in enumerate(words, start=5):
+        print(j, w)
+    for n, s, v in zip([1, 2], ["x", "y"], [10, 20]):
+        print(n, s, v)
+    return 0

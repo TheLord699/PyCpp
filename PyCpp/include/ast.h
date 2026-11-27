@@ -284,6 +284,7 @@ struct Parameter {
     std::string name;
     std::unique_ptr<Type> type;
     std::unique_ptr<Expr> default_value;
+    bool variadic = false;   /* fix.py2:va-ast */ // *args
 
     Parameter(std::string n, std::unique_ptr<Type> t, std::unique_ptr<Expr> dv);
 };
@@ -329,6 +330,8 @@ public:
 };
 
 class WhileStmt : public Stmt {
+public:
+    std::vector<std::unique_ptr<Stmt>> else_body;   /* fix.py2:while-ast */
 public:
     std::unique_ptr<Expr> condition;
     std::vector<std::unique_ptr<Stmt>> body;

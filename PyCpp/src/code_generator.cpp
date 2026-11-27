@@ -336,6 +336,24 @@ public:
 // Marks a source blank line in the generated text (resolved in generateProgram).
 static const char kBlankMarker = '\x01';
 
+/* fix.py2:helpers */
+// name=value arguments: print(sep=","), enumerate(xs, start=1), max(xs, key=len)
+static bool isKeywordArg(Expr* e) {
+    auto b = dynamic_cast<BinaryOp*>(e);
+    return b && b->op == "=" && dynamic_cast<Identifier*>(b->left.get());
+}
+static Expr* keywordValue(CallExpr* call, const char* name) {
+    for (auto& a : call->arguments)
+        if (auto b = dynamic_cast<BinaryOp*>(a.get()); b && b->op == "=")
+            if (auto id = dynamic_cast<Identifier*>(b->left.get()); id && id->name == name) return b->right.get();
+    return nullptr;
+}
+static Expr* argOrKeyword(CallExpr* call, size_t index, const char* name) {
+    if (Expr* kw = keywordValue(call, name)) return kw;
+    if (index < call->arguments.size() && !isKeywordArg(call->arguments[index].get())) return call->arguments[index].get();
+    return nullptr;
+}
+
 // Text of a PyCPP string literal -> body of a C++ string literal.
 static std::string cppEscape(const std::string& raw) {
     std::string out;
@@ -1572,7 +1590,34 @@ void CodeGenerator::generateExpression(Expr* expr) {
             output << ")";
             return;
         }
-        else         if (function_name == "print") {
+        else         if (function_name == "print" && (keywordValue(call_expr, "sep") || keywordValue(call_expr, "end") || keywordValue(call_expr, "flush"))) {   /* fix.py2:print */
+            require("iostream");
+            useRuntime();
+            Expr* sep = keywordValue(call_expr, "sep");
+            Expr* end = keywordValue(call_expr, "end");
+            Expr* flush = keywordValue(call_expr, "flush");
+            output << "std::cout";
+            bool first = true;
+            for (auto& arg : call_expr->arguments) {
+                if (isKeywordArg(arg.get())) continue;
+                if (!first) {
+                    output << " << pycpp::to_str(";
+                    if (sep) generateExpression(sep); else output << "std::string(\" \")";
+                    output << ")";
+                }
+                first = false;
+                output << " << pycpp::to_str(" << listLiteralPrefix(arg.get());
+                generateExpression(arg.get());
+                output << ")";
+            }
+            output << " << pycpp::to_str(";
+            if (end) generateExpression(end); else output << "std::string(\"\\n\")";
+            output << ")";
+            auto flush_false = dynamic_cast<BoolLiteral*>(flush);
+            if (flush && !(flush_false && !flush_false->value)) output << " << std::flush";
+            return;
+        }
+        else if (function_name == "print") {
             require("iostream");
             output << "std::cout";
             for (size_t i = 0; i < call_expr->arguments.size(); ++i) {
@@ -1633,6 +1678,28 @@ void CodeGenerator::generateExpression(Expr* expr) {
             useRuntime();
             output << "pycpp::to_repr(";
             generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            return;
+        }
+        else if (function_name == "isinstance" && call_expr->arguments.size() == 2) {   /* fix.py2:isinstance-cg */
+            useRuntime();
+            Expr* subject = call_expr->arguments[0].get();
+            std::vector<Expr*> kinds;
+            if (auto kind_tuple = dynamic_cast<TupleLiteral*>(call_expr->arguments[1].get()))
+                for (auto& e : kind_tuple->elements) kinds.push_back(e.get());
+            else kinds.push_back(call_expr->arguments[1].get());
+            static const std::set<std::string> builtin_kinds = { "int", "float", "str", "bool", "list", "dict", "set", "tuple" };
+            output << "(";
+            for (size_t i = 0; i < kinds.size(); ++i) {
+                if (i > 0) output << " || ";
+                auto kind_id = dynamic_cast<Identifier*>(kinds[i]);
+                const std::string kind_name = kind_id ? kind_id->name : std::string("void");
+                if (builtin_kinds.count(kind_name)) output << "pycpp::isinst_" << kind_name << "(";
+                else output << "pycpp::is_instance<" << kind_name << ">(";
+                output << listLiteralPrefix(subject);
+                generateExpression(subject);
+                output << ")";
+            }
             output << ")";
             return;
         }
@@ -1717,6 +1784,40 @@ void CodeGenerator::generateExpression(Expr* expr) {
             else {
                 output << "std::set<int>()";
             }
+            return;
+        }
+        else if ((function_name == "min" || function_name == "max") && keywordValue(call_expr, "key")) {   /* fix.py2:minmax-key */
+            require("algorithm");
+            std::vector<Expr*> items;
+            for (auto& arg : call_expr->arguments) if (!isKeywordArg(arg.get())) items.push_back(arg.get());
+            if (items.empty()) { output << "0"; return; }
+            Expr* key = keywordValue(call_expr, "key");
+            output << lambdaCapture() << "() { ";
+            if (items.size() == 1) {
+                output << "auto&& pycpp_c = " << listLiteralPrefix(items[0]);
+                generateExpression(items[0]);
+                output << "; ";
+            }
+            else {
+                output << "auto pycpp_c = std::vector<std::common_type_t<";
+                for (size_t i = 0; i < items.size(); ++i) {
+                    output << (i ? ", " : "") << "std::decay_t<decltype(";
+                    generateExpression(items[i]);
+                    output << ")>";
+                }
+                output << ">>{";
+                for (size_t i = 0; i < items.size(); ++i) {
+                    if (i > 0) output << ", ";
+                    generateExpression(items[i]);
+                }
+                output << "}; ";
+            }
+            output << "auto pycpp_key = ";
+            if (auto key_id = dynamic_cast<Identifier*>(key); key_id && key_id->name == "len")
+                output << "[](const auto& x) { return static_cast<int>(x.size()); }";
+            else generateExpression(key);
+            output << "; return *std::" << function_name
+                   << "_element(pycpp_c.begin(), pycpp_c.end(), [&](const auto& a, const auto& b) { return pycpp_key(a) < pycpp_key(b); }); }()";
             return;
         }
         else if ((function_name == "min" || function_name == "max" || function_name == "sum") &&
@@ -1980,6 +2081,26 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
+        else if (function_name == "sorted" && (keywordValue(call_expr, "key") || keywordValue(call_expr, "reverse"))) {   /* fix.py2:sorted-key */
+            require("algorithm");
+            Expr* key = keywordValue(call_expr, "key");
+            Expr* rev = keywordValue(call_expr, "reverse");
+            Expr* iter = (!call_expr->arguments.empty() && !isKeywordArg(call_expr->arguments[0].get()))
+                             ? call_expr->arguments[0].get() : nullptr;
+            if (!iter) { output << "std::vector<int>()"; return; }
+            output << lambdaCapture() << "() { auto tmp = " << listLiteralPrefix(iter);
+            generateExpression(iter);
+            output << "; auto pycpp_key = ";
+            if (!key) output << "[](const auto& x) -> const auto& { return x; }";
+            else if (auto key_id = dynamic_cast<Identifier*>(key); key_id && key_id->name == "len")
+                output << "[](const auto& x) { return static_cast<int>(x.size()); }";
+            else generateExpression(key);
+            output << "; bool pycpp_rev = ";
+            if (rev) generateExpression(rev); else output << "false";
+            output << "; std::stable_sort(tmp.begin(), tmp.end(), [&](const auto& a, const auto& b) { "
+                      "return pycpp_rev ? pycpp_key(b) < pycpp_key(a) : pycpp_key(a) < pycpp_key(b); }); return tmp; }()";
+            return;
+        }
         else if (function_name == "sorted") {
             if (call_expr->arguments.size() > 0) {
                 output << lambdaCapture() << "() { auto tmp = ";
@@ -2007,7 +2128,12 @@ void CodeGenerator::generateExpression(Expr* expr) {
                 output << lambdaCapture() << "() { auto&& container =  ";
                 generateExpression(call_expr->arguments[0].get());
                 output << "; std::vector<std::pair<int, std::decay_t<decltype(*container.begin())>>> result; ";
-                output << "int index = 0; for(auto& elem : container) { result.push_back({index++, elem}); } return result; }()";
+                {   /* fix.py2:enumerate */
+                    Expr* pycpp_start = argOrKeyword(call_expr, 1, "start");
+                    output << "int index = ";
+                    if (pycpp_start) generateExpression(pycpp_start); else output << "0";
+                }
+                output << "; for(auto& elem : container) { result.push_back({index++, elem}); } return result; }()";
             }
             else {
                 output << "std::vector<std::pair<int, int>>()";
@@ -2024,6 +2150,27 @@ void CodeGenerator::generateExpression(Expr* expr) {
                       "auto pycpp_ia = pycpp_a.begin(); auto pycpp_ib = pycpp_b.begin(); "
                       "for (; pycpp_ia != pycpp_a.end() && pycpp_ib != pycpp_b.end(); ++pycpp_ia, ++pycpp_ib) "
                       "pycpp_r.push_back({*pycpp_ia, *pycpp_ib}); return pycpp_r; }()";
+            return;
+        }
+        else if (function_name == "zip" && call_expr->arguments.size() >= 3 && !isKeywordArg(call_expr->arguments.back().get())) {   /* fix.py2:zip */
+            const size_t n = call_expr->arguments.size();
+            output << lambdaCapture() << "() { ";
+            for (size_t i = 0; i < n; ++i) {
+                output << "auto&& pycpp_z" << i << " = " << listLiteralPrefix(call_expr->arguments[i].get());
+                generateExpression(call_expr->arguments[i].get());
+                output << "; ";
+            }
+            output << "std::vector<std::tuple<";
+            for (size_t i = 0; i < n; ++i) output << (i ? ", " : "") << "std::decay_t<decltype(*pycpp_z" << i << ".begin())>";
+            output << ">> pycpp_r; ";
+            for (size_t i = 0; i < n; ++i) output << "auto pycpp_i" << i << " = pycpp_z" << i << ".begin(); ";
+            output << "for (; ";
+            for (size_t i = 0; i < n; ++i) output << (i ? " && " : "") << "pycpp_i" << i << " != pycpp_z" << i << ".end()";
+            output << "; ";
+            for (size_t i = 0; i < n; ++i) output << (i ? ", " : "") << "++pycpp_i" << i;
+            output << ") pycpp_r.push_back(std::make_tuple(";
+            for (size_t i = 0; i < n; ++i) output << (i ? ", " : "") << "*pycpp_i" << i;
+            output << ")); return pycpp_r; }()";
             return;
         }
         else if (function_name == "zip") {
@@ -2600,6 +2747,33 @@ void CodeGenerator::visit(IfStmt& node) {
 }
 
 void CodeGenerator::visit(WhileStmt& node) {
+    if (!node.else_body.empty()) {   /* fix.py2:while-cg */
+        // while (true) { if (!cond) { done = true; break; } body }   if (done) { else }
+        // `break` in the body skips the else block, `continue` re-tests the condition.
+        static int while_else_counter = 0;
+        const std::string done = "pycpp_while_done_" + std::to_string(++while_else_counter);
+        output << getIndent() << "{\n";
+        indent();
+        output << getIndent() << "bool " << done << " = false;\n";
+        output << getIndent() << "while (true) {\n";
+        indent();
+        output << getIndent() << "if (!(";
+        if (node.condition) generateExpression(node.condition.get());
+        output << ")) { " << done << " = true; break; }\n";
+        for (auto& stmt : node.body) generateStatement(stmt.get());
+        dedent();
+        output << getIndent() << "}\n";
+        output << getIndent() << "if (" << done << ") {\n";
+        indent();
+        pushScope();
+        for (auto& stmt : node.else_body) generateStatement(stmt.get());
+        popScope();
+        dedent();
+        output << getIndent() << "}\n";
+        dedent();
+        output << getIndent() << "}\n";
+        return;
+    }
     output << getIndent() << "while (";
     if (node.condition) {
         generateExpression(node.condition.get());

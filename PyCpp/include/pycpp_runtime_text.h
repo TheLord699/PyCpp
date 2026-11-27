@@ -1035,6 +1035,33 @@ template <class C> bool all(const C& c) { for (const auto& x : c) if (!x) return
 
 } // namespace pycpp
 
+namespace pycpp {   // fix.py2:isinstance-rt
+template <class V> bool isinst_int(const V&) { using P = plain_t<V>; return std::is_integral_v<P> && !std::is_same_v<P, bool> && !std::is_same_v<P, char>; }
+template <class V> bool isinst_float(const V&) { return std::is_floating_point_v<plain_t<V>>; }
+template <class V> bool isinst_bool(const V&) { return std::is_same_v<plain_t<V>, bool>; }
+template <class V> bool isinst_str(const V&) { return is_str_v<V>; }
+template <class V> bool isinst_list(const V&) { return is_vector_v<V>; }
+template <class V> bool isinst_dict(const V&) { return is_map_v<V>; }
+template <class V> bool isinst_set(const V&) { return is_set_v<V>; }
+template <class V> bool isinst_tuple(const V&) { return is_tuple_v<plain_t<V>>; }
+
+// isinstance(x, SomeClass): dynamic_cast for polymorphic classes, a static answer otherwise
+template <class T, class V>
+bool is_instance(const V& v) {
+    if constexpr (std::is_pointer_v<V>) {
+        using B = std::remove_cv_t<std::remove_pointer_t<V>>;
+        if constexpr (std::is_class_v<B> && std::is_polymorphic_v<B>) return v != nullptr && dynamic_cast<const T*>(v) != nullptr;
+        else return std::is_base_of_v<T, B> || std::is_same_v<T, B>;
+    }
+    else if constexpr (std::is_class_v<V> && std::is_polymorphic_v<V>) {
+        return dynamic_cast<const T*>(&v) != nullptr;
+    }
+    else {
+        return std::is_base_of_v<T, V> || std::is_same_v<T, V>;
+    }
+}
+} // namespace pycpp
+
 using pycpp::Exception;
 using pycpp::ArithmeticError;
 using pycpp::ZeroDivisionError;

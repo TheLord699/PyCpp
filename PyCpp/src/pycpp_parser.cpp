@@ -621,6 +621,65 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
         return placeholder;
     }
 
+    if (check(TokenType::WITH)) {   /* fix.py2:with-parse */
+        // with a as x, b as y:  ->  { x = a; x.__enter__(); defer x.__exit__(); y = b; ...; body }
+        const Token keyword = advance();
+        static int with_counter = 0;
+        auto block = std::make_unique<Block>();
+        block->line = keyword.line;
+        block->column = keyword.column;
+        auto ident = [&](const std::string& n) {
+            auto id = std::make_unique<Identifier>();
+            id->name = n;
+            id->line = keyword.line;
+            id->column = keyword.column;
+            return id;
+        };
+        auto method_call = [&](const std::string& obj, const std::string& method) {
+            auto call = std::make_unique<CallExpr>();
+            call->callee = std::make_unique<MemberAccess>(ident(obj), method, keyword.line, keyword.column);
+            call->line = keyword.line;
+            call->column = keyword.column;
+            auto stmt = std::make_unique<ExprStmt>();
+            stmt->expr = std::move(call);
+            stmt->line = keyword.line;
+            stmt->column = keyword.column;
+            return stmt;
+        };
+        do {
+            auto value = parseExpression();
+            std::string name = "pycpp_with_" + std::to_string(++with_counter);
+            if (match(TokenType::AS)) name = consumeName("Expected a name after 'as'");
+            auto assign = std::make_unique<BinaryOp>();
+            assign->left = ident(name);
+            assign->op = "=";
+            assign->right = std::move(value);
+            assign->line = keyword.line;
+            assign->column = keyword.column;
+            auto assign_stmt = std::make_unique<ExprStmt>();
+            assign_stmt->expr = std::move(assign);
+            assign_stmt->line = keyword.line;
+            assign_stmt->column = keyword.column;
+            block->statements.push_back(std::move(assign_stmt));
+            block->statements.push_back(method_call(name, "__enter__"));
+            auto cleanup = std::make_unique<DeferStmt>();
+            cleanup->line = keyword.line;
+            cleanup->column = keyword.column;
+            cleanup->body.push_back(method_call(name, "__exit__"));
+            block->statements.push_back(std::move(cleanup));
+        } while (match(TokenType::COMMA));
+        consume(TokenType::COLON, "Expected ':' after the 'with' items");
+        std::vector<std::unique_ptr<Stmt>> with_body;
+        if (check(TokenType::NEWLINE)) {
+            advance();
+            with_body = parseBlock();
+        }
+        else if (auto with_stmt = parseStatement()) {
+            with_body.push_back(std::move(with_stmt));
+        }
+        for (auto& s : with_body) block->statements.push_back(std::move(s));
+        return block;
+    }
     if (check(TokenType::DEFER)) { advance(); return parseDeferStmt(); }
     if (check(TokenType::TRY)) { advance(); return parseTryStmt(); }
     if (check(TokenType::RAISE)) { advance(); return parseRaiseStmt(); }
@@ -756,6 +815,7 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     // Parse parameters
     if (!check(TokenType::RPAREN)) {
         do {
+            const bool variadic = match(TokenType::STAR);   /* fix.py2:va-name */
             std::string param_name = consumeName("Expected parameter name");
             pycpp::debugLog() << "Found parameter: " << param_name << std::endl;
 
@@ -783,7 +843,17 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
                 pycpp::debugLog() << "Parameter " << param_name << " has default value" << std::endl;
             }
 
+            if (variadic) {   /* fix.py2:va-wrap */   // *args: T  ->  args: list[T]
+                if (!param_type) throw std::runtime_error("a *args parameter needs a type, for example `*values: int`");
+                auto list_type = std::make_unique<ListType>();
+                list_type->line = param_type->line;
+                list_type->column = param_type->column;
+                list_type->name = "std::vector<" + param_type->name + ">";
+                list_type->element_type = std::move(param_type);
+                param_type = std::move(list_type);
+            }
             func->parameters.emplace_back(param_name, std::move(param_type), std::move(default_value));
+            func->parameters.back().variadic = variadic;
         } while (match(TokenType::COMMA));
     }
 
@@ -1536,6 +1606,17 @@ std::unique_ptr<WhileStmt> PyCppParser::parseWhileStmt() {
         }
     }
 
+    if (check(TokenType::ELSE) && checkNext(TokenType::COLON)) {   /* fix.py2:while-parse */
+        advance();   // else
+        advance();   // :
+        if (check(TokenType::NEWLINE)) {
+            advance();
+            while_stmt->else_body = parseBlock();
+        }
+        else if (auto else_stmt = parseStatement()) {
+            while_stmt->else_body.push_back(std::move(else_stmt));
+        }
+    }
     return while_stmt;
 }
 
@@ -2383,7 +2464,13 @@ std::unique_ptr<Expr> PyCppParser::parsePrimary() {
                 result = parseCall(std::move(ident));
             }
             else {
-                throw std::runtime_error("Expected '(' after cast type '" + type_name + "'");
+                {   /* fix.py2:isinstance-parse */   // a bare type name is a value: isinstance(x, int)
+                    auto type_ident = std::make_unique<Identifier>();
+                    type_ident->name = type_name;
+                    type_ident->line = tokens[position - 1].line;
+                    type_ident->column = tokens[position - 1].column;
+                    result = std::move(type_ident);
+                }
             }
         }
         else {

@@ -1,0 +1,16 @@
+# expect-exit: 0
+# expect-stdout: 6 0
+# expect-stdout: x:a-b
+def total(*nums: int) -> int:
+    s: int = 0
+    for n in nums:
+        s += n
+    return s
+
+def tag(prefix: str, *parts: str) -> str:
+    return prefix + ":" + "-".join(parts)
+
+def main() -> int:
+    print(total(1, 2, 3), total())
+    print(tag("x", "a", "b"))
+    return 0

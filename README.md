@@ -186,8 +186,12 @@ Supported syntax:
 - `lambda a, b: a + b` (captures by reference; a lambda that is returned or stored in a member captures by copy).
 - Python methods of `str`, `list`, `dict` and `set` (`s.upper()`, `line.split(",")`, `"-".join(words)`, `xs.pop()`, `d.get(k, 0)`, ...), see [Collections](#9-collections).
 - `super()`: `super().__init__(...)` (as the first statement of `__init__`) and `super().method(...)`, see [Classes](#7-classes-and-object-oriented-programming).
-- `with`, `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
+- `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
 - `pycpp` exits with the exit code of the program it ran.
+- Keyword arguments: `box(2, d=4)`, `Player(hp=5, name="a")` are reordered at compile time (keywords must cover every parameter up to the last one given). `*args: int` collects extra positional arguments into a `list[int]`.
+- `print(a, b, sep="-", end="")`, `enumerate(xs, 1)`, `zip(a, b, c)`, `min(xs, key=len)`, `max(...)`, `sorted(xs, key=f, reverse=True)`, `isinstance(x, Dog)` and `isinstance(x, (int, float))`.
+- `while ...: ... else:` runs the else block when the loop ends without `break`.
+- `with Res() as r:` calls `r.__enter__()` and, however the block ends, `r.__exit__()` (no arguments); `r` is the object itself.
 - `type(x)` prints like Python (`<class 'int'>`), has `.__name__` and can be compared: `type(a) == type(b)`. `any(...)`, `all(...)` (also with generator expressions) and `repr(x)` are built in.
 - Exceptions: `try` / `except` / `else` / `finally` and `raise`.
   ```python

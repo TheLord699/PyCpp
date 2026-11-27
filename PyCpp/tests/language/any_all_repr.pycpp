@@ -1,0 +1,8 @@
+# expect-exit: 0
+# expect-stdout: True False
+# expect-stdout: 'hi' 5
+def main() -> int:
+    nums: list[int] = [1, 2, 3]
+    print(any(n > 2 for n in nums), all(n > 2 for n in nums))
+    print(repr("hi"), repr(5))
+    return 0

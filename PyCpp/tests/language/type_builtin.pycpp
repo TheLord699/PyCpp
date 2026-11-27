@@ -1,0 +1,13 @@
+# expect-exit: 0
+# expect-stdout: <class 'int'> <class 'str'> <class 'float'> <class 'bool'> <class 'list'>
+# expect-stdout: Point int True False
+class Point:
+    def __init__(self, x: int):
+        self.x: int = x
+
+def main() -> int:
+    nums: list[int] = [1, 2]
+    print(type(5), type("a"), type(2.5), type(True), type(nums))
+    p = Point(1)
+    print(type(p).__name__, type(3).__name__, type(1) == type(2), type(1) == type("x"))
+    return 0

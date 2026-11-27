@@ -112,7 +112,7 @@ SemanticAnalyzer::SemanticAnalyzer()
                               "RuntimeError" }) {
         addSymbol(name, "class");
     }
-    for (const char* name : { "list", "dict", "set", "tuple" }) {
+    for (const char* name : { "list", "dict", "set", "tuple", "any", "all", "repr" }) {   // [fix.py]
         addSymbol(name, "function");
     }
 }
@@ -583,6 +583,9 @@ std::string SemanticAnalyzer::getExpressionType(Expr* expr) {
             const std::string& n = ident->name;
             if (n == "super" && current_class) return current_class->base_class.empty() ? "auto" : current_class->base_class;
             if (n == "print") return "void";
+            if (n == "any" || n == "all") return "bool";   // [fix.py]
+            if (n == "repr") return "std::string";
+            if (n == "type") return "auto";
             if (n == "len" || n == "ord") return "int";
             if (n == "str" || n == "chr" || n == "bin" || n == "oct" || n == "hex" || n == "input") return "std::string";
             if (n == "int") return "int";

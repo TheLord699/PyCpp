@@ -6,6 +6,10 @@
 // Written next to the generated files whenever generated code uses it.
 inline const char* const kPycppRuntime = R"PYCPP(#ifndef PYCPP_RUNTIME_H
 #define PYCPP_RUNTIME_H
+#include <typeinfo>   // [fix.py] type()
+#if defined(__GNUG__)
+#include <cxxabi.h>
+#endif
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -980,6 +984,54 @@ std::string format_spec(const T& value, const std::string& spec) {
         return pad_formatted(f, "", text, '<');
     }
 }
+
+// ===================== type(), any(), all() =====================  [fix.py]
+// type(x) gives an object that prints as <class 'int'> and has __name__.
+struct TypeObject {
+    std::string __name__;
+    bool operator==(const TypeObject& o) const { return __name__ == o.__name__; }
+    bool operator!=(const TypeObject& o) const { return __name__ != o.__name__; }
+    friend std::ostream& operator<<(std::ostream& os, const TypeObject& t) {
+        return os << "<class '" << t.__name__ << "'>";
+    }
+};
+
+// Class name without namespace (pycpp_player::Player -> Player) or MSVC's "class " prefix.
+inline std::string demangle_type(const char* raw) {
+    std::string s = raw;
+#if defined(__GNUG__)
+    int status = 0;
+    char* d = abi::__cxa_demangle(raw, nullptr, nullptr, &status);
+    if (status == 0 && d) s = d;
+    std::free(d);
+#else
+    for (const std::string prefix : {std::string("class "), std::string("struct ")}) {
+        size_t k;
+        while ((k = s.find(prefix)) != std::string::npos) s.erase(k, prefix.size());
+    }
+#endif
+    const size_t lt = s.find('<');
+    const size_t k = s.rfind("::", lt);
+    if (k != std::string::npos) s.erase(0, k + 2);
+    return s;
+}
+
+template <class T>
+TypeObject type_of(const T& v) {
+    if constexpr (std::is_same_v<T, bool>) return {"bool"};
+    else if constexpr (is_text<T> || std::is_same_v<T, char>) return {"str"};
+    else if constexpr (std::is_integral_v<T>) return {"int"};
+    else if constexpr (std::is_floating_point_v<T>) return {"float"};
+    else if constexpr (is_tuple_v<T>) return {"tuple"};
+    else if constexpr (requires { typename T::mapped_type; }) return {"dict"};
+    else if constexpr (requires { typename T::key_type; }) return {"set"};
+    else if constexpr (requires { v.begin(); v.end(); }) return {"list"};
+    else return {demangle_type(typeid(v).name())};
+}
+
+// any(xs) / all(xs): truthiness of the elements
+template <class C> bool any(const C& c) { for (const auto& x : c) if (x) return true; return false; }
+template <class C> bool all(const C& c) { for (const auto& x : c) if (!x) return false; return true; }
 
 } // namespace pycpp
 

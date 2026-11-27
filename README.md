@@ -188,6 +188,7 @@ Supported syntax:
 - `super()`: `super().__init__(...)` (as the first statement of `__init__`) and `super().method(...)`, see [Classes](#7-classes-and-object-oriented-programming).
 - `with`, `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
 - `pycpp` exits with the exit code of the program it ran.
+- `type(x)` prints like Python (`<class 'int'>`), has `.__name__` and can be compared: `type(a) == type(b)`. `any(...)`, `all(...)` (also with generator expressions) and `repr(x)` are built in.
 - Exceptions: `try` / `except` / `else` / `finally` and `raise`.
   ```python
   def main() -> int:

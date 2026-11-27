@@ -1615,6 +1615,27 @@ void CodeGenerator::generateExpression(Expr* expr) {
             }
             return;
         }
+        else if (function_name == "type" && call_expr->arguments.size() == 1) {   // [fix.py]
+            useRuntime();
+            output << "pycpp::type_of(" << listLiteralPrefix(call_expr->arguments[0].get());
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            return;
+        }
+        else if ((function_name == "any" || function_name == "all") && call_expr->arguments.size() == 1) {
+            useRuntime();
+            output << "pycpp::" << function_name << "(" << listLiteralPrefix(call_expr->arguments[0].get());
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            return;
+        }
+        else if (function_name == "repr" && call_expr->arguments.size() == 1) {
+            useRuntime();
+            output << "pycpp::to_repr(";
+            generateExpression(call_expr->arguments[0].get());
+            output << ")";
+            return;
+        }
         else if (function_name == "int" || function_name == "float" ||
                  function_name == "str" || function_name == "bool") {
             if (call_expr->arguments.empty()) {

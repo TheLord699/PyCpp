@@ -1,8 +1,9 @@
 # expect-exit: 0
-# expect-stdout: ['fig', 'pear', 'banana']
-# expect-stdout: ['banana', 'pear', 'fig']
-# expect-stdout: [-2, 4, 9]
-# expect-stdout: [9, 4, -2]
+# expect-stdout-sequence: ['fig', 'pear', 'banana']
+# expect-stdout-sequence: ['banana', 'pear', 'fig']
+# expect-stdout-sequence: [-2, 4, 9]
+# expect-stdout-sequence: [9, 4, -2]
+# expect-stdout-sequence: [9, 4, -2]
 def negate(n: int) -> int:
     return 0 - n
 

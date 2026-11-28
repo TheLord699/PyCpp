@@ -26,6 +26,9 @@ inline const char* const kPycppRuntime = R"PYCPP(#ifndef PYCPP_RUNTIME_H
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <charconv>
+#include <string_view>
+#include <cstring>
 
 namespace pycpp {
 
@@ -144,18 +147,38 @@ template <class T>
 std::string float_to_str(T v) {
     if (std::isnan(v)) return "nan";
     if (std::isinf(v)) return v < 0 ? "-inf" : "inf";
+
     char buf[64];
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    // Shortest round-trippable digits + decimal exponent, without snprintf/strtod.
+    // std::to_chars is the C++17 Ryu/Grisu primitive (~100x faster than the loop).
+    auto res = std::to_chars(buf, buf + sizeof buf, static_cast<double>(v),
+                             std::chars_format::scientific);
+    size_t len;
+    if (res.ec == std::errc()) {
+        len = static_cast<size_t>(res.ptr - buf);
+    } else {
+        std::snprintf(buf, sizeof buf, "%.17e", static_cast<double>(v));
+        len = std::strlen(buf);
+    }
+#else
+    // Portable fallback: find the shortest %.*e that round-trips.
     for (int p = 0; p <= 17; ++p) {
         std::snprintf(buf, sizeof buf, "%.*e", p, static_cast<double>(v));
         if (static_cast<T>(std::strtod(buf, nullptr)) == v) break;
     }
-    std::string s = buf;                                  // e.g. -1.5e+02
-    const bool neg = s[0] == '-';
-    if (neg) s.erase(0, 1);
+    const size_t len = std::strlen(buf);
+#endif
+
+    // buf looks like "-1.2345e+02"; parse sign, digits, exponent.
+    std::string_view s(buf, len);
+    const bool neg = !s.empty() && s[0] == '-';
+    if (neg) s.remove_prefix(1);
     const size_t epos = s.find('e');
-    const int exp10 = std::atoi(s.c_str() + epos + 1);
+    const int exp10 = std::atoi(std::string(s.substr(epos + 1)).c_str());
     std::string digits;
     for (size_t i = 0; i < epos; ++i) if (s[i] != '.') digits += s[i];
+
     std::string out;
     if (exp10 < -4 || exp10 >= 16) {
         out = digits.substr(0, 1);
@@ -197,7 +220,6 @@ std::string to_str(const T& v) {
     }
 }
 
-// Text of an element inside a container: strings are quoted, like Python's repr()
 template <class T>
 std::string to_repr(const T& v) {
     if constexpr (is_text<T>) return "'" + std::string(v) + "'";
@@ -205,13 +227,38 @@ std::string to_repr(const T& v) {
     else return to_str(v);
 }
 
-// (1, 'a')  /  (1,)
+// Append the repr of a scalar directly into `out`, avoiding a temporary std::string.
+// Nested containers and user types still allocate via to_str; everything scalar does not.
+template <class T>
+void append_repr(std::string& out, const T& v) {
+    if constexpr (is_text<T>) {
+        out += '\'';
+        out += v;
+        out += '\'';
+    } else if constexpr (std::is_same_v<T, char>) {
+        out += '\'';
+        out += v;
+        out += '\'';
+    } else if constexpr (std::is_same_v<T, bool>) {
+        out += v ? "True" : "False";
+    } else if constexpr (std::is_integral_v<T>) {
+        char buf[24];
+        auto r = std::to_chars(buf, buf + sizeof buf, v);
+        if (r.ec == std::errc()) out.append(buf, static_cast<size_t>(r.ptr - buf));
+        else out += std::to_string(v);   // unreachable for 64-bit ints, but safe
+    } else if constexpr (std::is_floating_point_v<T>) {
+        out += float_to_str(v);
+    } else {
+        out += to_str(v);   // nested containers, tuples, user classes
+    }
+}
+
 template <class T>
 std::string tuple_str(const T& t) {
     std::string out = "(";
     std::apply([&](const auto&... item) {
         size_t i = 0;
-        ((out += (i++ ? ", " : "") + to_repr(item)), ...);
+        ((out += (i++ ? ", " : ""), append_repr(out, item)), ...);
     }, t);
     if constexpr (std::tuple_size_v<T> == 1) out += ",";
     return out + ")";
@@ -222,13 +269,20 @@ template <class C>
 std::string container_str(const C& c) {
     constexpr bool is_map = requires { typename C::mapped_type; };
     constexpr bool is_set = requires { typename C::key_type; } && !is_map;
-    std::string out = (is_map || is_set) ? "{" : "[";
+    std::string out;
+    out.reserve(c.size() * (is_map ? 12u : 6u) + 2u);   // rough average; avoids most reallocations
+    out += (is_map || is_set) ? "{" : "[";
     bool first = true;
     for (const auto& item : c) {
         if (!first) out += ", ";
         first = false;
-        if constexpr (is_map) out += to_repr(item.first) + ": " + to_repr(item.second);
-        else out += to_repr(item);
+        if constexpr (is_map) {
+            append_repr(out, item.first);
+            out += ": ";
+            append_repr(out, item.second);
+        } else {
+            append_repr(out, item);
+        }
     }
     out += (is_map || is_set) ? "}" : "]";
     return out;

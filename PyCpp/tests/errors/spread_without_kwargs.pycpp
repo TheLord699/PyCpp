@@ -1,0 +1,9 @@
+# expect-exit: 1
+# expect-stderr: '**' unpacking is only allowed when calling a function that has a **kwargs parameter
+def plain(a: int) -> int:
+    return a
+
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    print(plain(**d))
+    return 0

@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-stderr: a **kwargs parameter must be the last parameter
+def f(**opts: int, x: int) -> void:
+    pass
+
+def main() -> int:
+    return 0

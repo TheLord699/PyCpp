@@ -197,6 +197,10 @@ void TupleLiteral::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }
 
+void WithStmt::accept(ASTVisitor& visitor) {   // fix.py3:with-accept
+    visitor.visit(*this);
+}
+
 void UnpackStmt::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
 }

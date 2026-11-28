@@ -1045,6 +1045,14 @@ template <class V> bool isinst_dict(const V&) { return is_map_v<V>; }
 template <class V> bool isinst_set(const V&) { return is_set_v<V>; }
 template <class V> bool isinst_tuple(const V&) { return is_tuple_v<plain_t<V>>; }
 
+// list.sort(key=f, reverse=True): stable like Python's; reverse=True keeps equal elements in their original order.  [fix.py3:sort-by]
+template <class V, class K>
+void sort_by(V& v, K&& key, bool reverse) {
+    std::stable_sort(v.begin(), v.end(), [&](const auto& a, const auto& b) {
+        return reverse ? key(b) < key(a) : key(a) < key(b);
+    });
+}
+
 // isinstance(x, SomeClass): dynamic_cast for polymorphic classes, a static answer otherwise
 template <class T, class V>
 bool is_instance(const V& v) {

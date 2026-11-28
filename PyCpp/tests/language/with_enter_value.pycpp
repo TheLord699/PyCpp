@@ -1,0 +1,21 @@
+# expect-exit: 0
+# expect-stdout: open demo
+# expect-stdout: using demo
+# expect-stdout: 42
+# expect-stdout: closed demo
+class Session:
+    def __init__(self, name: str):
+        self.name: str = name
+
+    def __enter__(self) -> int:
+        print("open", self.name)
+        return 42
+
+    def __exit__(self) -> void:
+        print("closed", self.name)
+
+def main() -> int:
+    with Session("demo") as handle:
+        print("using", "demo")
+        print(handle)
+    return 0

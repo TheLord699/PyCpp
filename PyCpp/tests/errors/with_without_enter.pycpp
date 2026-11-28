@@ -1,0 +1,10 @@
+# expect-exit: 1
+# expect-stderr: error[E0112]: class 'Plain' has no '__enter__' method
+class Plain:
+    def __init__(self):
+        self.x: int = 0
+
+def main() -> int:
+    with Plain():
+        print("never")
+    return 0

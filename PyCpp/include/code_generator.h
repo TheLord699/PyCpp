@@ -92,6 +92,7 @@ private:
     void generateType(Type* type);
     void generateExpression(Expr* expr);
     void generateRangeLoop(ForStmt& node, CallExpr* call);
+    void generateForLoop(ForStmt& node);   // fix.py3:for-decl
     void generateComprehension(Comprehension* comp);
     void generateFString(FString* fs);
     void generateLambda(Lambda* lambda);
@@ -141,6 +142,7 @@ public:
     void visit(RaiseStmt& node) override;
     void visit(TupleLiteral& node) override;
     void visit(UnpackStmt& node) override;
+    void visit(WithStmt& node) override;   // fix.py3:with-cg-decl
 
     void visit(IntLiteral& node) override;
     void visit(FloatLiteral& node) override;

@@ -187,10 +187,13 @@ Supported syntax:
 - `super()`: `super().__init__(...)` (as the first statement of `__init__`) and `super().method(...)`, see [Classes](#7-classes-and-object-oriented-programming).
 - `yield`, `async`/`await`, `global` and `nonlocal` are not supported; the error message suggests the PyCPP alternative (`defer` instead of `with`, a list instead of a generator, ...).
 - `pycpp` exits with the exit code of the program it ran.
+- `for ...: ... else:` runs the else block when the loop ends without `break` (nested loops each have their own).
+- `**kwargs`: `def f(a: int, *rest: int, **opts: int)` collects extra `name=value` arguments into a `dict[str, int]`; `f(1, 2, x=3)` and `f(1, **d)` both work. Parameters before `*args` / `**kwargs` cannot be skipped when those receive values.
+- `xs.sort(key=len, reverse=True)`: stable, like Python's. `key` is a function, a lambda, or `len` / `abs` / `str` / `int` / `float` / `ord`. <!-- fix.py3:docs-new -->
 - Keyword arguments: `box(2, d=4)`, `Player(hp=5, name="a")` are reordered at compile time (keywords must cover every parameter up to the last one given). `*args: int` collects extra positional arguments into a `list[int]`.
 - `print(a, b, sep="-", end="")`, `enumerate(xs, 1)`, `zip(a, b, c)`, `min(xs, key=len)`, `max(...)`, `sorted(xs, key=f, reverse=True)`, `isinstance(x, Dog)` and `isinstance(x, (int, float))`.
 - `while ...: ... else:` runs the else block when the loop ends without `break`.
-- `with Res() as r:` calls `r.__enter__()` and, however the block ends, `r.__exit__()` (no arguments); `r` is the object itself.
+- `with Res() as r:` calls `r.__enter__()` and, however the block ends, `r.__exit__()` (no arguments); `r` is the value `__enter__()` returns, or the object itself when `__enter__` returns nothing. Several items (`with A() as a, B() as b:`) exit in reverse order. <!-- fix.py3:docs-with -->
 - `type(x)` prints like Python (`<class 'int'>`), has `.__name__` and can be compared: `type(a) == type(b)`. `any(...)`, `all(...)` (also with generator expressions) and `repr(x)` are built in.
 - Exceptions: `try` / `except` / `else` / `finally` and `raise`.
   ```python

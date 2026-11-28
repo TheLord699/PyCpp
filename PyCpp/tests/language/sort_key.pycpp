@@ -1,0 +1,30 @@
+# expect-exit: 0
+# expect-stdout: ['fig', 'pear', 'banana']
+# expect-stdout: ['banana', 'pear', 'fig']
+# expect-stdout: [-2, 4, 9]
+# expect-stdout: [9, 4, -2]
+def negate(n: int) -> int:
+    return 0 - n
+
+class Bag:
+    def __init__(self):
+        self.items: list[int] = [4, -2, 9]
+
+    def order(self) -> void:
+        self.items.sort(key=negate)
+
+def main() -> int:
+    words: list[str] = ["pear", "fig", "banana"]
+    words.sort(key=len)
+    print(words)
+    words.sort(key=len, reverse=True)
+    print(words)
+    nums: list[int] = [4, -2, 9]
+    nums.sort(key=lambda n: n * n)
+    print(nums)
+    nums.sort(reverse=True)
+    print(nums)
+    bag = Bag()
+    bag.order()
+    print(bag.items)
+    return 0

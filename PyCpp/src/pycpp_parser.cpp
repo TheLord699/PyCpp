@@ -621,64 +621,28 @@ std::unique_ptr<Stmt> PyCppParser::parseStatement() {
         return placeholder;
     }
 
-    if (check(TokenType::WITH)) {   /* fix.py2:with-parse */
-        // with a as x, b as y:  ->  { x = a; x.__enter__(); defer x.__exit__(); y = b; ...; body }
+    if (check(TokenType::WITH)) {   /* fix.py3:with-parse */
         const Token keyword = advance();
-        static int with_counter = 0;
-        auto block = std::make_unique<Block>();
-        block->line = keyword.line;
-        block->column = keyword.column;
-        auto ident = [&](const std::string& n) {
-            auto id = std::make_unique<Identifier>();
-            id->name = n;
-            id->line = keyword.line;
-            id->column = keyword.column;
-            return id;
-        };
-        auto method_call = [&](const std::string& obj, const std::string& method) {
-            auto call = std::make_unique<CallExpr>();
-            call->callee = std::make_unique<MemberAccess>(ident(obj), method, keyword.line, keyword.column);
-            call->line = keyword.line;
-            call->column = keyword.column;
-            auto stmt = std::make_unique<ExprStmt>();
-            stmt->expr = std::move(call);
-            stmt->line = keyword.line;
-            stmt->column = keyword.column;
-            return stmt;
-        };
+        auto with_stmt = std::make_unique<WithStmt>();
+        with_stmt->line = keyword.line;
+        with_stmt->column = keyword.column;
         do {
-            auto value = parseExpression();
-            std::string name = "pycpp_with_" + std::to_string(++with_counter);
-            if (match(TokenType::AS)) name = consumeName("Expected a name after 'as'");
-            auto assign = std::make_unique<BinaryOp>();
-            assign->left = ident(name);
-            assign->op = "=";
-            assign->right = std::move(value);
-            assign->line = keyword.line;
-            assign->column = keyword.column;
-            auto assign_stmt = std::make_unique<ExprStmt>();
-            assign_stmt->expr = std::move(assign);
-            assign_stmt->line = keyword.line;
-            assign_stmt->column = keyword.column;
-            block->statements.push_back(std::move(assign_stmt));
-            block->statements.push_back(method_call(name, "__enter__"));
-            auto cleanup = std::make_unique<DeferStmt>();
-            cleanup->line = keyword.line;
-            cleanup->column = keyword.column;
-            cleanup->body.push_back(method_call(name, "__exit__"));
-            block->statements.push_back(std::move(cleanup));
+            WithItem item;
+            item.line = peek().line;
+            item.column = peek().column;
+            item.value = parseExpression();
+            if (match(TokenType::AS)) item.alias = consumeName("Expected a name after 'as'");
+            with_stmt->items.push_back(std::move(item));
         } while (match(TokenType::COMMA));
         consume(TokenType::COLON, "Expected ':' after the 'with' items");
-        std::vector<std::unique_ptr<Stmt>> with_body;
         if (check(TokenType::NEWLINE)) {
             advance();
-            with_body = parseBlock();
+            with_stmt->body = parseBlock();
         }
-        else if (auto with_stmt = parseStatement()) {
-            with_body.push_back(std::move(with_stmt));
+        else if (auto inline_stmt = parseStatement()) {
+            with_stmt->body.push_back(std::move(inline_stmt));
         }
-        for (auto& s : with_body) block->statements.push_back(std::move(s));
-        return block;
+        return with_stmt;
     }
     if (check(TokenType::DEFER)) { advance(); return parseDeferStmt(); }
     if (check(TokenType::TRY)) { advance(); return parseTryStmt(); }
@@ -815,7 +779,8 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
     // Parse parameters
     if (!check(TokenType::RPAREN)) {
         do {
-            const bool variadic = match(TokenType::STAR);   /* fix.py2:va-name */
+            const bool kwvariadic = match(TokenType::DOUBLE_STAR);   /* fix.py3:kw-name */
+            const bool variadic = !kwvariadic && match(TokenType::STAR);   /* fix.py2:va-name */
             std::string param_name = consumeName("Expected parameter name");
             pycpp::debugLog() << "Found parameter: " << param_name << std::endl;
 
@@ -843,6 +808,21 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
                 pycpp::debugLog() << "Parameter " << param_name << " has default value" << std::endl;
             }
 
+            if (kwvariadic) {   /* fix.py3:kw-wrap */   // **opts: T  ->  opts: dict[str, T]
+                if (!param_type) throw std::runtime_error("a **kwargs parameter needs a type, for example `**options: int`");
+                if (default_value) throw std::runtime_error("a **kwargs parameter cannot have a default value");
+                auto key_type = std::make_unique<BasicType>();
+                key_type->line = param_type->line;
+                key_type->column = param_type->column;
+                key_type->name = "std::string";
+                auto dict_type = std::make_unique<DictType>();
+                dict_type->line = param_type->line;
+                dict_type->column = param_type->column;
+                dict_type->name = "std::map<std::string," + param_type->name + ">";
+                dict_type->key_type = std::move(key_type);
+                dict_type->value_type = std::move(param_type);
+                param_type = std::move(dict_type);
+            }
             if (variadic) {   /* fix.py2:va-wrap */   // *args: T  ->  args: list[T]
                 if (!param_type) throw std::runtime_error("a *args parameter needs a type, for example `*values: int`");
                 auto list_type = std::make_unique<ListType>();
@@ -854,9 +834,13 @@ std::unique_ptr<FunctionDef> PyCppParser::parseFunctionDef() {
             }
             func->parameters.emplace_back(param_name, std::move(param_type), std::move(default_value));
             func->parameters.back().variadic = variadic;
+            func->parameters.back().kwvariadic = kwvariadic;   // fix.py3:kw-set
         } while (match(TokenType::COMMA));
     }
 
+    for (size_t pi = 0; pi + 1 < func->parameters.size(); ++pi)   /* fix.py3:kw-last */
+        if (func->parameters[pi].kwvariadic)
+            throw std::runtime_error("a **kwargs parameter must be the last parameter");
     consume(TokenType::RPAREN, "Expected ')' after parameters");
 
     // FIXED: Enhanced return type parsing
@@ -1660,6 +1644,17 @@ std::unique_ptr<ForStmt> PyCppParser::parseForStmt() {
         }
     }
 
+    if (check(TokenType::ELSE) && checkNext(TokenType::COLON)) {   /* fix.py3:for-parse */
+        advance();   // else
+        advance();   // :
+        if (check(TokenType::NEWLINE)) {
+            advance();
+            for_stmt->else_body = parseBlock();
+        }
+        else if (auto else_stmt = parseStatement()) {
+            for_stmt->else_body.push_back(std::move(else_stmt));
+        }
+    }
     return for_stmt;
 }
 
@@ -2163,6 +2158,16 @@ std::unique_ptr<Expr> PyCppParser::parseCall(std::unique_ptr<Expr> callee) {
     if (!check(TokenType::RPAREN)) {
         do {
             if (check(TokenType::RPAREN)) break;   // trailing comma
+            if (check(TokenType::DOUBLE_STAR)) {   /* fix.py3:kw-spread */
+                const Token star = advance();
+                auto spread = std::make_unique<UnaryOp>();
+                spread->op = "**";
+                spread->line = star.line;
+                spread->column = star.column;
+                spread->operand = parseExpression();
+                call->arguments.push_back(std::move(spread));
+                continue;
+            }
             call->arguments.push_back(parseExpression());
             // A generator expression as the only argument: sum(x * x for x in xs)
             if (check(TokenType::FOR) && call->arguments.size() == 1) {

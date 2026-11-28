@@ -28,6 +28,7 @@ private:
         std::vector<std::pair<std::string, std::string>> parameters;
         size_t required = 0;      // [fix2] parameters without a default value
         bool generic = false;
+        bool kwvariadic = false;   /* fix.py3:kw-header */ // last parameter is **kwargs
         bool variadic = false;   /* fix.py2:kw-header */ // last parameter is *args
         int line = 0;             // where it is defined (for notes)
     };
@@ -95,6 +96,7 @@ private:
                             int name_length);
     void checkMethodCall(CallExpr* call, MemberAccess* callee);
     void checkSuper(CallExpr* super_call);
+    void bindExtendedArguments(CallExpr* call, const std::string& what, const FunctionSymbol& fs);   // fix.py3:bind-decl
     bool isSuperCall(Expr* expr);
     void checkIntegerTarget(Expr* value, const std::string& target_type, const std::string& what);
 
@@ -125,6 +127,7 @@ private:
     void analyzeTryStmt(TryStmt* t);
     void analyzeRaiseStmt(RaiseStmt* r);
     void analyzeUnpack(UnpackStmt* u);
+    void analyzeWithStmt(WithStmt* w);   // fix.py3:with-decl
     int handler_depth = 0;   // > 0 while analysing the body of an except clause
 
     // NEW: Import statement analysis

@@ -890,6 +890,20 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 }
                 return;
             }
+            if (auto sort_member = dynamic_cast<MemberAccess*>(call->callee.get()); sort_member && sort_member->member == "sort") {   /* fix.py3:sort-analyze */
+                const std::string sorted_type = getExpressionType(sort_member->object.get());
+                if (startsWith(sorted_type, "std::vector<")) {
+                    for (auto& a : call->arguments) {
+                        auto kw = dynamic_cast<BinaryOp*>(a.get());
+                        auto kid = (kw && kw->op == "=") ? dynamic_cast<Identifier*>(kw->left.get()) : nullptr;
+                        if (!kid) errorAt("E0106", "list.sort() takes only the keyword arguments key= and reverse=", a.get());
+                        if (kid->name != "key" && kid->name != "reverse")
+                            errorAt("E0106", "list.sort() has no keyword argument '" + kid->name + "'", kid,
+                                    "sort accepts key= and reverse=");
+                    }
+                    return;
+                }
+            }
             const FunctionSymbol* kw_target = nullptr;
             std::string kw_what;
             if (auto kc = dynamic_cast<Identifier*>(call->callee.get())) {
@@ -913,7 +927,8 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                     kw_what = "method '" + ot + "." + km->member + "'";
                 }
             }
-            if (!kw_target || kw_target->generic || kw_target->variadic) return;
+            if (!kw_target || kw_target->generic) return;
+            if (!kw_target->variadic && !kw_target->kwvariadic) {   /* fix.py3:kw-skip */
 
             const size_t kw_total = kw_target->parameters.size();
             std::string kw_sig = kw_target->name + "(";
@@ -971,6 +986,7 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                 else ordered.push_back(std::move(src));
             }
             call->arguments = std::move(ordered);
+            }   /* fix.py3:kw-skip-end */
         }   // keyword arguments are matched by the C++ compiler
 
         if (auto member = dynamic_cast<MemberAccess*>(call->callee.get())) {
@@ -1008,6 +1024,11 @@ void SemanticAnalyzer::analyzeExpression(Expr* expr) {
                         callee);
             }
         }
+
+        for (auto& spread_arg : call->arguments)   /* fix.py3:spread-check */
+            if (auto spread_op = dynamic_cast<UnaryOp*>(spread_arg.get()); spread_op && spread_op->op == "**")
+                errorAt("E0106", "'**' unpacking is only allowed when calling a function that has a **kwargs parameter",
+                        spread_op);
 
         // Track built-in function calls
         if (auto ident = dynamic_cast<Identifier*>(call->callee.get())) {
@@ -1094,7 +1115,8 @@ void SemanticAnalyzer::analyzeProgram(Program* program) {
 
             for (const auto& param : func->parameters) {
                 func_sym.parameters.emplace_back(param.name, typeToString(param.type.get()));
-                if (param.variadic) func_sym.variadic = true;   /* fix.py2:va-reg-fn */
+                if (param.kwvariadic) func_sym.kwvariadic = true;   /* fix.py3:kw-reg-fn */
+                else if (param.variadic) func_sym.variadic = true;   /* fix.py2:va-reg-fn */
                 else if (!param.default_value) func_sym.required = func_sym.parameters.size();
             }
 
@@ -1179,10 +1201,11 @@ void SemanticAnalyzer::checkUnreachable(const std::vector<std::unique_ptr<Stmt>>
             for (auto& e : f->elif_branches) checkUnreachable(e.second);
             checkUnreachable(f->else_branch);
         }
-        else if (auto w = dynamic_cast<WhileStmt*>(s)) checkUnreachable(w->body);
-        else if (auto fo = dynamic_cast<ForStmt*>(s)) checkUnreachable(fo->body);
+        else if (auto w = dynamic_cast<WhileStmt*>(s)) { checkUnreachable(w->body); checkUnreachable(w->else_body); }   /* fix.py3:unreach-while */
+        else if (auto fo = dynamic_cast<ForStmt*>(s)) { checkUnreachable(fo->body); checkUnreachable(fo->else_body); }   /* fix.py3:unreach-for */
         else if (auto u = dynamic_cast<UnsafeBlock*>(s)) checkUnreachable(u->body);
         else if (auto d = dynamic_cast<DeferStmt*>(s)) checkUnreachable(d->body);
+        else if (auto wi = dynamic_cast<WithStmt*>(s)) checkUnreachable(wi->body);   /* fix.py3:unreach-with */
         else if (auto t = dynamic_cast<TryStmt*>(s)) {
             checkUnreachable(t->body);
             for (auto& h : t->handlers) checkUnreachable(h.body);
@@ -1311,6 +1334,9 @@ void SemanticAnalyzer::analyzeStatement(Stmt* stmt) {
     }
     else if (auto raise_stmt = dynamic_cast<RaiseStmt*>(stmt)) {
         analyzeRaiseStmt(raise_stmt);
+    }
+    else if (auto with_stmt = dynamic_cast<WithStmt*>(stmt)) {   /* fix.py3:with-dispatch */
+        analyzeWithStmt(with_stmt);
     }
     else if (auto match_stmt = dynamic_cast<MatchStmt*>(stmt)) {
         analyzeMatchStmt(match_stmt);
@@ -1751,6 +1777,13 @@ void SemanticAnalyzer::analyzeForStmt(ForStmt* for_stmt) {
     }
     analyzeBody(for_stmt->body);
     exitScope();
+    if (!for_stmt->else_body.empty()) {   /* fix.py3:for-analyze */
+        enterScope();
+        analyzeBody(for_stmt->else_body);
+        exitScope();
+    }
+    enterScope();   // balanced by the exitScope() that follows
+    exitScope();
 }
 
 void SemanticAnalyzer::analyzeReturnStmt(ReturnStmt* return_stmt) {
@@ -1911,6 +1944,47 @@ void SemanticAnalyzer::analyzeRaiseStmt(RaiseStmt* r) {
 }
 
 // a, b = value: every target is assigned from the tuple, or declared when it is a new name
+// with a as x, b as y: ...   (x is what __enter__() returns, or the object itself when it returns nothing)
+void SemanticAnalyzer::analyzeWithStmt(WithStmt* w) {   /* fix.py3:with-analyze */
+    if (!current_function)
+        error("E0110", "'with' can only be used inside a function", w->line, w->column,
+              "put the with statement inside a def");
+    enterScope();
+    for (auto& item : w->items) {
+        analyzeExpression(item.value.get());
+        const std::string type = getExpressionType(item.value.get());
+        item.through_pointer = !type.empty() && type.back() == '*';
+        const std::string cls = item.through_pointer ? type.substr(0, type.size() - 1) : type;
+        const FunctionSymbol* enter = nullptr;
+        const FunctionSymbol* leave = nullptr;
+        if (classOf(cls)) {
+            enter = findMethod(cls, "__enter__");
+            leave = findMethod(cls, "__exit__");
+            if (classFullyKnown(cls)) {
+                if (!enter)
+                    errorAt("E0112", "class '" + cls + "' has no '__enter__' method, so it cannot be used in a 'with' statement",
+                            item.value.get(), "define `def __enter__(self) -> void:` in the class");
+                if (!leave)
+                    errorAt("E0112", "class '" + cls + "' has no '__exit__' method, so it cannot be used in a 'with' statement",
+                            item.value.get(), "define `def __exit__(self) -> void:` in the class");
+            }
+        }
+        if (enter && enter->required > 0)
+            errorAt("E0106", "'" + cls + ".__enter__' must take no arguments besides self", item.value.get());
+        if (leave && leave->required > 0)
+            errorAt("E0106", "'" + cls + ".__exit__' must take no arguments besides self in PyCPP", item.value.get());
+        item.enter_returns = enter && enter->return_type != "void" && enter->return_type != "None";
+        if (!item.alias.empty()) {
+            std::string alias_type = item.enter_returns ? enter->return_type : type;
+            if (alias_type.empty() || alias_type == "unknown") alias_type = "auto";
+            item.alias_decl = typeFromString(alias_type);
+            addSymbol(item.alias, alias_type, true, item.line, item.column);
+        }
+    }
+    analyzeBody(w->body);
+    exitScope();
+}
+
 void SemanticAnalyzer::analyzeUnpack(UnpackStmt* u) {
     analyzeExpression(u->value.get());
     const std::string value_type = getExpressionType(u->value.get());
@@ -2043,7 +2117,8 @@ void SemanticAnalyzer::registerClassMembers(ClassDef* cls) {
         for (const auto& param : method->parameters) {
             if (param.name == "self") continue;
             m.parameters.emplace_back(param.name, typeToString(param.type.get()));
-            if (param.variadic) m.variadic = true;   /* fix.py2:va-reg-method */
+            if (param.kwvariadic) m.kwvariadic = true;   /* fix.py3:kw-reg-method */
+            else if (param.variadic) m.variadic = true;   /* fix.py2:va-reg-method */
             else if (!param.default_value) m.required = m.parameters.size();
         }
         sym.methods[method->name] = m;
@@ -2161,9 +2236,171 @@ static bool isSimpleType(const std::string& t) {
     return simple.count(t) > 0;
 }
 
+// fix.py3:extended-bind
+// Binds the arguments of a call to a function with *args and/or **kwargs:
+//   f(1, 2, 3, a=4)  ->  f(1, {2, 3}, {{"a", 4}})        f(1, **d)  ->  f(1, {}, d)
+void SemanticAnalyzer::bindExtendedArguments(CallExpr* call, const std::string& what, const FunctionSymbol& fs) {
+    if (call->packed_extras) return;
+    const size_t total = fs.parameters.size();
+    const size_t tail = (fs.variadic ? 1 : 0) + (fs.kwvariadic ? 1 : 0);
+    if (total < tail) return;
+    const size_t fixed = total - tail;
+    const std::string elem = fs.variadic ? elementTypeOf(fs.parameters[fixed].second) : std::string();
+    const std::string kw_type = fs.kwvariadic ? fs.parameters.back().second : std::string();
+    const std::string kw_value = fs.kwvariadic ? mapTypes(kw_type).second : std::string();
+    const std::string kw_name = fs.kwvariadic ? fs.parameters.back().first : std::string();
+    const std::string var_name = fs.variadic ? fs.parameters[fixed].first : std::string();
+
+    std::string signature = fs.name + "(";
+    for (size_t p = 0; p < total; ++p) {
+        const bool is_var = fs.variadic && p == fixed;
+        const bool is_kw = fs.kwvariadic && p + 1 == total;
+        signature += std::string(p ? ", " : "") + std::string(is_var ? "*" : is_kw ? "**" : "") +
+                     fs.parameters[p].first + ": " +
+                     friendlyType(is_var ? elem : is_kw ? kw_value : fs.parameters[p].second);
+    }
+    signature += ")";
+
+    auto keywordName = [](Expr* e) -> Identifier* {
+        auto kw = dynamic_cast<BinaryOp*>(e);
+        return (kw && kw->op == "=") ? dynamic_cast<Identifier*>(kw->left.get()) : nullptr;
+    };
+
+    std::vector<size_t> positional;
+    std::vector<std::pair<std::string, size_t>> named;   // keyword name -> argument index
+    long long spread = -1;                               // index of a `**d` argument
+    for (size_t i = 0; i < call->arguments.size(); ++i) {
+        Expr* a = call->arguments[i].get();
+        if (Identifier* kid = keywordName(a)) { named.emplace_back(kid->name, i); continue; }
+        auto sp = dynamic_cast<UnaryOp*>(a);
+        if (sp && sp->op == "**") {
+            if (!fs.kwvariadic)
+                errorAt("E0106", what + " has no **kwargs parameter, so '**' cannot be used in this call", sp,
+                        "signature: " + signature);
+            if (spread >= 0) errorAt("E0106", "only one '**' argument is allowed in a call", sp);
+            spread = static_cast<long long>(i);
+            continue;
+        }
+        if (!named.empty() || spread >= 0)
+            errorAt("E0106", "a positional argument cannot follow a keyword argument", a);
+        positional.push_back(i);
+    }
+
+    std::vector<long long> slot(fixed, -1);   // fixed parameter -> index into call->arguments
+    std::vector<size_t> extras;               // positional arguments that go into *args
+    for (size_t k = 0; k < positional.size(); ++k) {
+        if (k < fixed) slot[k] = static_cast<long long>(positional[k]);
+        else extras.push_back(positional[k]);
+    }
+    if (!extras.empty() && !fs.variadic)
+        errorAt("E0106", what + " takes " + std::to_string(fixed) + (fixed == 1 ? " argument" : " arguments") +
+                " but " + std::to_string(positional.size()) + " positional ones were supplied", call,
+                "signature: " + signature);
+
+    std::vector<size_t> kwextras;             // indexes into `named` that go into **kwargs
+    for (size_t n = 0; n < named.size(); ++n) {
+        size_t j = fixed;
+        for (size_t p = 0; p < fixed; ++p) if (fs.parameters[p].first == named[n].first) j = p;
+        Expr* at = call->arguments[named[n].second].get();
+        if (j < fixed) {
+            if (slot[j] >= 0)
+                errorAt("E0106", what + " got more than one value for '" + named[n].first + "'", at);
+            slot[j] = static_cast<long long>(named[n].second);
+        }
+        else if (fs.kwvariadic) {
+            for (size_t m : kwextras)
+                if (named[m].first == named[n].first)
+                    errorAt("E0106", what + " got more than one value for '" + named[n].first + "'", at);
+            kwextras.push_back(n);
+        }
+        else {
+            errorAt("E0106", what + " has no parameter named '" + named[n].first + "'", at, "signature: " + signature);
+        }
+    }
+    if (spread >= 0 && !kwextras.empty())
+        errorAt("E0106", "'**' cannot be combined with other keyword arguments", call->arguments[static_cast<size_t>(spread)].get(),
+                "pass either one dictionary or separate name=value arguments");
+
+    size_t filled = 0;
+    while (filled < fixed && slot[filled] >= 0) ++filled;
+    for (size_t p = filled; p < fixed; ++p)
+        if (slot[p] >= 0)
+            errorAt("E0106", "parameter '" + fs.parameters[filled].first + "' is skipped but '" + fs.parameters[p].first + "' is given",
+                    call->arguments[static_cast<size_t>(slot[p])].get(),
+                    "keyword arguments must cover every parameter up to the last one given; also pass '" +
+                    fs.parameters[filled].first + "=...'");
+    if (filled < fs.required)
+        errorAt("E0106", what + " is missing the argument for '" + fs.parameters[filled].first + "'", call,
+                "signature: " + signature);
+
+    const bool need_k = fs.kwvariadic && (!kwextras.empty() || spread >= 0);
+    const bool need_v = fs.variadic && (!extras.empty() || need_k);
+    if ((need_v || need_k) && filled < fixed)
+        errorAt("E0106", what + " needs a value for '" + fs.parameters[filled].first + "' before the extra arguments", call,
+                "a parameter with a default value cannot be skipped when *args or **kwargs receive values; pass it explicitly");
+
+    std::vector<std::unique_ptr<Expr>> rebuilt;
+    auto take = [&](size_t index) -> std::unique_ptr<Expr> {
+        auto& src = call->arguments[index];
+        if (keywordName(src.get())) return std::move(static_cast<BinaryOp*>(src.get())->right);
+        return std::move(src);
+    };
+    for (size_t p = 0; p < filled; ++p) rebuilt.push_back(take(static_cast<size_t>(slot[p])));
+
+    if (need_v) {
+        auto pack = std::make_unique<ListLiteral>();
+        pack->line = call->line;
+        pack->column = call->column;
+        for (size_t idx : extras) {
+            Expr* extra = call->arguments[idx].get();
+            const std::string found = getExpressionType(extra);
+            if ((isSimpleType(elem) || classes.count(elem)) && (isSimpleType(found) || classes.count(found)) &&
+                !typesAreCompatible(elem, found))
+                errorAt("E0107", "mismatched types: '*" + var_name + "' takes " + friendlyType(elem) +
+                        " values, found " + friendlyType(found), extra);
+            pack->elements.push_back(take(idx));
+        }
+        rebuilt.push_back(std::move(pack));
+    }
+
+    if (need_k) {
+        if (spread >= 0) {
+            auto* sp = static_cast<UnaryOp*>(call->arguments[static_cast<size_t>(spread)].get());
+            const std::string found = getExpressionType(sp->operand.get());
+            if (found != kw_type && found.find("auto") == std::string::npos && found != "unknown" &&
+                (startsWith(found, "std::map<") || startsWith(found, "std::vector<") || isSimpleType(found)))
+                errorAt("E0107", "mismatched types: '**" + kw_name + "' expects " + friendlyType(kw_type) +
+                        ", found " + friendlyType(found), sp->operand.get());
+            rebuilt.push_back(std::move(sp->operand));
+        }
+        else {
+            auto dict = std::make_unique<DictLiteral>();
+            dict->line = call->line;
+            dict->column = call->column;
+            for (size_t n : kwextras) {
+                Expr* value = static_cast<BinaryOp*>(call->arguments[named[n].second].get())->right.get();
+                const std::string found = getExpressionType(value);
+                if ((isSimpleType(kw_value) || classes.count(kw_value)) && (isSimpleType(found) || classes.count(found)) &&
+                    !typesAreCompatible(kw_value, found))
+                    errorAt("E0107", "mismatched types: '**" + kw_name + "' takes " + friendlyType(kw_value) +
+                            " values, found " + friendlyType(found), value);
+                auto key = std::make_unique<StringLiteral>();
+                key->value = named[n].first;
+                key->line = value->line;
+                key->column = value->column;
+                dict->items.emplace_back(std::move(key), take(named[n].second));
+            }
+            rebuilt.push_back(std::move(dict));
+        }
+    }
+    call->arguments = std::move(rebuilt);
+    call->packed_extras = true;
+}
+
 void SemanticAnalyzer::checkCallArguments(CallExpr* call, const std::string& what, const FunctionSymbol& fs,
                                           int name_length) {
-    if (fs.variadic && !fs.parameters.empty()) {   /* fix.py2:va-pack */   // f(1, 2, 3) -> f({2, 3}) for def f(a, *rest)
+    if (fs.variadic || fs.kwvariadic) bindExtendedArguments(call, what, fs);   /* fix.py3:extended-route */
+    if (fs.variadic && !call->packed_extras && !fs.parameters.empty()) {   /* fix.py2:va-pack */   // f(1, 2, 3) -> f({2, 3}) for def f(a, *rest)
         const size_t fixed = fs.parameters.size() - 1;
         const bool packed = call->arguments.size() == fixed + 1 &&
                             dynamic_cast<ListLiteral*>(call->arguments[fixed].get()) &&
@@ -2438,6 +2675,9 @@ static bool breaksOut(const std::vector<std::unique_ptr<Stmt>>& body) {
             for (auto& c : m->cases) if (breaksOut(c.body)) return true;
         }
         else if (auto u = dynamic_cast<UnsafeBlock*>(s)) { if (breaksOut(u->body)) return true; }
+        else if (auto wi = dynamic_cast<WithStmt*>(s)) { if (breaksOut(wi->body)) return true; }   /* fix.py3:breaks-with */
+        else if (auto lf = dynamic_cast<ForStmt*>(s)) { if (breaksOut(lf->else_body)) return true; }   /* fix.py3:breaks-else */
+        else if (auto lw = dynamic_cast<WhileStmt*>(s)) { if (breaksOut(lw->else_body)) return true; }
         else if (auto b = dynamic_cast<Block*>(s)) { if (breaksOut(b->statements)) return true; }
     }
     return false;
@@ -2479,6 +2719,7 @@ bool SemanticAnalyzer::terminates(Stmt* s) {
         }
         return has_default;
     }
+    if (auto wi = dynamic_cast<WithStmt*>(s)) return terminates(wi->body);   /* fix.py3:terminates-with */
     if (auto u = dynamic_cast<UnsafeBlock*>(s)) return terminates(u->body);
     if (auto b = dynamic_cast<Block*>(s)) return terminates(b->statements);
     return false;

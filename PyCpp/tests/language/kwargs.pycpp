@@ -1,0 +1,35 @@
+# expect-exit: 0
+# expect-stdout: a 0 0
+# expect-stdout: b 2 3
+# expect-stdout: p:u-v color=red
+# expect-stdout: q:
+# expect-stdout: 3
+# expect-stdout: c 2 30
+def config(name: str, **opts: int) -> int:
+    total: int = 0
+    for key, value in opts.items():
+        total += value
+    print(name, len(opts), total)
+    return total
+
+def tagged(prefix: str, *parts: str, **attrs: str) -> str:
+    out: str = prefix + ":" + "-".join(parts)
+    for key, value in attrs.items():
+        out += " " + key + "=" + value
+    return out
+
+class Widget:
+    def __init__(self, name: str, **props: int):
+        self.name: str = name
+        self.count: int = len(props)
+
+def main() -> int:
+    config("a")
+    config("b", x=1, y=2)
+    print(tagged("p", "u", "v", color="red"))
+    print(tagged("q"))
+    w = Widget("w", a=1, b=2, c=3)
+    print(w.count)
+    extra: dict[str, int] = {"m": 10, "n": 20}
+    print(config("c", **extra))
+    return 0

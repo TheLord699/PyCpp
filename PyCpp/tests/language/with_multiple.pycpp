@@ -1,0 +1,21 @@
+# expect-exit: 0
+# expect-stdout: enter a
+# expect-stdout: enter b
+# expect-stdout: ab
+# expect-stdout: exit b
+# expect-stdout: exit a
+class Tag:
+    def __init__(self, name: str):
+        self.name: str = name
+
+    def __enter__(self) -> str:
+        print("enter", self.name)
+        return self.name
+
+    def __exit__(self) -> void:
+        print("exit", self.name)
+
+def main() -> int:
+    with Tag("a") as first, Tag("b") as second:
+        print(first + second)
+    return 0

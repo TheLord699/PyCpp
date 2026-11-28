@@ -336,6 +336,15 @@ public:
 // Marks a source blank line in the generated text (resolved in generateProgram).
 static const char kBlankMarker = '\x01';
 
+/* fix.py3:loop-flags */
+// One entry per enclosing loop: "" for a plain loop, or the name of the flag that a `break`
+// must set because the loop has an `else:` block (the else runs only when the flag stays false).
+static std::vector<std::string>& loopFlags() { static std::vector<std::string> flags; return flags; }
+struct LoopGuard {
+    explicit LoopGuard(const std::string& flag) { loopFlags().push_back(flag); }
+    ~LoopGuard() { loopFlags().pop_back(); }
+};
+
 /* fix.py2:helpers */
 // name=value arguments: print(sep=","), enumerate(xs, start=1), max(xs, key=len)
 static bool isKeywordArg(Expr* e) {
@@ -904,6 +913,7 @@ void CodeGenerator::generateParameters(FunctionDef* func, bool include_defaults)
         generateType(param.type.get());
         output << " " << param.name;
 
+        if ((param.variadic || param.kwvariadic) && !param.default_value && include_defaults) output << " = {}";   /* fix.py3:va-default */
         if (param.default_value && include_defaults) {
             output << " = ";
             generateExpression(param.default_value.get());
@@ -2321,6 +2331,33 @@ void CodeGenerator::generateExpression(Expr* expr) {
 
             // Python methods of str/list/dict/set -> runtime helpers with Python semantics.
             // An object known to be a class keeps its own methods.
+            if (method == "sort" && !isUserObject(member_access->object.get()) &&   /* fix.py3:sort-cg */
+                (keywordValue(call_expr, "key") || keywordValue(call_expr, "reverse"))) {
+                require("algorithm");
+                useRuntime();
+                Expr* sort_key = keywordValue(call_expr, "key");
+                Expr* sort_rev = keywordValue(call_expr, "reverse");
+                auto key_text = [&](Expr* k) -> std::string {
+                    if (auto id = dynamic_cast<Identifier*>(k)) {
+                        if (id->name == "len") return "[](const auto& x) { return static_cast<int>(x.size()); }";
+                        if (id->name == "abs") return "[](const auto& x) { return x < 0 ? -x : x; }";
+                        if (id->name == "str") return "[](const auto& x) { return pycpp::to_str(x); }";
+                        if (id->name == "int") return "[](const auto& x) { return pycpp::to_int(x); }";
+                        if (id->name == "float") return "[](const auto& x) { return pycpp::to_double(x); }";
+                        if (id->name == "ord") return "[](const auto& x) { return static_cast<int>(x); }";
+                    }
+                    return exprToString(k);
+                };
+                output << "pycpp::sort_by(";
+                generateExpression(member_access->object.get());
+                output << ", ";
+                if (sort_key) output << key_text(sort_key);
+                else output << "[](const auto& x) -> const auto& { return x; }";
+                output << ", ";
+                if (sort_rev) generateExpression(sort_rev); else output << "false";
+                output << ")";
+                return;
+            }
             if (pycpp::isBuiltinMethodName(method) && !isUserObject(member_access->object.get())) {
                 useRuntime();
                 output << "pycpp::py_" << method << "(" << listLiteralPrefix(member_access->object.get());
@@ -2697,7 +2734,11 @@ void CodeGenerator::visit(PassStmt& node) {
     output << getIndent() << (node.is_ellipsis ? "// ...\n" : "// pass\n");
 }
 
-void CodeGenerator::visit(BreakStmt& node) {
+void CodeGenerator::visit(BreakStmt& node) {   /* fix.py3:break-flag */
+    if (!loopFlags().empty() && !loopFlags().back().empty()) {
+        output << getIndent() << "{ " << loopFlags().back() << " = true; break; }\n";
+        return;
+    }
     output << getIndent() << "break;\n";
 }
 
@@ -2747,6 +2788,7 @@ void CodeGenerator::visit(IfStmt& node) {
 }
 
 void CodeGenerator::visit(WhileStmt& node) {
+    LoopGuard pycpp_loop_guard((std::string()));   // fix.py3:while-guard
     if (!node.else_body.empty()) {   /* fix.py2:while-cg */
         // while (true) { if (!cond) { done = true; break; } body }   if (done) { else }
         // `break` in the body skips the else block, `continue` re-tests the condition.
@@ -2859,7 +2901,34 @@ void CodeGenerator::generateRangeLoop(ForStmt& node, CallExpr* call) {
     output << getIndent() << "}\n";
 }
 
-void CodeGenerator::visit(ForStmt& node) {
+void CodeGenerator::visit(ForStmt& node) {   /* fix.py3:for-cg */
+    static int for_else_counter = 0;
+    if (node.else_body.empty()) {
+        LoopGuard guard((std::string()));
+        generateForLoop(node);
+        return;
+    }
+    // { bool broke = false; for (...) { ... break -> { broke = true; break; } ... } if (!broke) { else } }
+    const std::string flag = "pycpp_for_broke_" + std::to_string(++for_else_counter);
+    output << getIndent() << "{\n";
+    indent();
+    output << getIndent() << "bool " << flag << " = false;\n";
+    {
+        LoopGuard guard(flag);
+        generateForLoop(node);
+    }
+    output << getIndent() << "if (!" << flag << ") {\n";
+    indent();
+    pushScope();
+    for (auto& stmt : node.else_body) generateStatement(stmt.get());
+    popScope();
+    dedent();
+    output << getIndent() << "}\n";
+    dedent();
+    output << getIndent() << "}\n";
+}
+
+void CodeGenerator::generateForLoop(ForStmt& node) {
     // for i in range(...): a counting loop, no temporary vector
     if (node.var_names.size() <= 1) {
         if (auto call = dynamic_cast<CallExpr*>(node.iterable.get())) {
@@ -3173,6 +3242,9 @@ static bool containsBreak(const std::vector<std::unique_ptr<Stmt>>& body) {   //
             for (auto& e : i->elif_branches) if (containsBreak(e.second)) return true;
         }
         else if (auto u = dynamic_cast<UnsafeBlock*>(s.get())) { if (containsBreak(u->body)) return true; }
+        else if (auto wi = dynamic_cast<WithStmt*>(s.get())) { if (containsBreak(wi->body)) return true; }   /* fix.py3:cb-with */
+        else if (auto lf = dynamic_cast<ForStmt*>(s.get())) { if (containsBreak(lf->else_body)) return true; }   /* fix.py3:cb-else */
+        else if (auto lw = dynamic_cast<WhileStmt*>(s.get())) { if (containsBreak(lw->else_body)) return true; }
         else if (auto b = dynamic_cast<Block*>(s.get())) { if (containsBreak(b->statements)) return true; }
         else if (auto m = dynamic_cast<MatchStmt*>(s.get())) {
             for (auto& c : m->cases) if (containsBreak(c.body)) return true;
@@ -3405,6 +3477,40 @@ void CodeGenerator::generateLambda(Lambda* lambda) {
     generateExpression(lambda->body.get());
     output << "; }";
     popScope();
+}
+
+// with a as x, b as y: body
+//   { auto&& t1 = a; auto x = t1.__enter__(); Defer d1(t1.__exit__()); ...; body }
+// Items exit in reverse order, however the block is left (return, break, exception).
+void CodeGenerator::visit(WithStmt& node) {   /* fix.py3:with-cg */
+    useRuntime();
+    output << getIndent() << "{\n";
+    indent();
+    pushScope();
+    for (auto& item : node.items) {
+        const std::string temp = "pycpp_with_" + std::to_string(++defer_counter);
+        const char* arrow = item.through_pointer ? "->" : ".";
+        output << getIndent() << "auto&& " << temp << " = ";
+        generateExpression(item.value.get());
+        output << ";\n";
+        if (item.enter_returns && !item.alias.empty()) {
+            output << getIndent() << "auto " << item.alias << " = " << temp << arrow << "__enter__();\n";
+        }
+        else {
+            output << getIndent() << temp << arrow << "__enter__();\n";
+            if (!item.alias.empty()) {   // __enter__ returns nothing: the alias is the object itself
+                if (item.through_pointer) output << getIndent() << "auto " << item.alias << " = " << temp << ";\n";
+                else output << getIndent() << "auto& " << item.alias << " = " << temp << ";\n";
+            }
+        }
+        if (!item.alias.empty()) declareVar(item.alias, item.alias_decl.get());
+        output << getIndent() << "pycpp::Defer pycpp_defer_" << ++defer_counter << "([&]() { "
+               << temp << arrow << "__exit__(); });\n";
+    }
+    for (auto& stmt : node.body) generateStatement(stmt.get());
+    popScope();
+    dedent();
+    output << getIndent() << "}\n";
 }
 
 void CodeGenerator::visit(TupleLiteral& node) {

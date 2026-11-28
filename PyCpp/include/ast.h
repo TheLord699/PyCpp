@@ -186,6 +186,7 @@ public:
     std::vector<std::unique_ptr<Type>> type_args;
     // true for a[i] (indexing), false for f(x) (a call)
     bool is_subscript = false;
+    bool packed_extras = false;   /* fix.py3:packed-ast */ // *args/**kwargs already collected by the analyzer
     void accept(ASTVisitor& visitor) override;
 };
 
@@ -284,6 +285,7 @@ struct Parameter {
     std::string name;
     std::unique_ptr<Type> type;
     std::unique_ptr<Expr> default_value;
+    bool kwvariadic = false;   /* fix.py3:kw-ast */ // **kwargs
     bool variadic = false;   /* fix.py2:va-ast */ // *args
 
     Parameter(std::string n, std::unique_ptr<Type> t, std::unique_ptr<Expr> dv);
@@ -339,6 +341,8 @@ public:
 };
 
 class ForStmt : public Stmt {
+public:
+    std::vector<std::unique_ptr<Stmt>> else_body;   /* fix.py3:for-ast */
 public:
     std::string var_name;                // first loop variable
     std::vector<std::string> var_names;  // all loop variables: for k, v in ...
@@ -473,6 +477,23 @@ public:
     void accept(ASTVisitor& visitor) override;
 };
 
+// with a as x, b as y:   x is what __enter__() returns, or the object itself when it returns nothing
+struct WithItem {   /* fix.py3:with-ast */
+    std::unique_ptr<Expr> value;
+    std::string alias;                    // `as name`; empty when absent
+    bool through_pointer = false;         // set by the analyzer: the value is a pointer to the context object
+    bool enter_returns = false;           // set by the analyzer: __enter__() returns a value
+    std::unique_ptr<Type> alias_decl;     // set by the analyzer: declared type of the alias
+    int line = 0, column = 0;
+};
+
+class WithStmt : public Stmt {
+public:
+    std::vector<WithItem> items;
+    std::vector<std::unique_ptr<Stmt>> body;
+    void accept(ASTVisitor& visitor) override;
+};
+
 class Program : public ASTNode {
 public:
     std::vector<std::unique_ptr<Stmt>> statements;
@@ -538,6 +559,7 @@ public:
     virtual void visit(Lambda&) {}
     virtual void visit(TupleLiteral&) {}
     virtual void visit(UnpackStmt&) {}
+    virtual void visit(WithStmt&) {}   /* fix.py3:with-visit */
 };
 
 #endif

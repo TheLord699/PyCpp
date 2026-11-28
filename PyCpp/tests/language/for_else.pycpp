@@ -1,0 +1,27 @@
+# expect-exit: 0
+# expect-stdout: no break: done
+# expect-stdout: found 3
+# expect-stdout: outer ok
+# expect-no-stdout: never printed
+def main() -> int:
+    for i in range(3):
+        pass
+    else:
+        print("no break: done")
+
+    for n in [1, 2, 3, 4]:
+        if n == 3:
+            print("found", n)
+            break
+    else:
+        print("never printed")
+
+    for a in range(2):
+        for b in range(3):
+            if b == 1:
+                break
+        else:
+            print("never printed")
+    else:
+        print("outer ok")
+    return 0

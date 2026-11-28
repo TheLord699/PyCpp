@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-stderr: error[E0107]: mismatched types: '**opts' takes int values, found str
+def f(**opts: int) -> void:
+    pass
+
+def main() -> int:
+    f(a="x")
+    return 0
